@@ -71,8 +71,11 @@ export function createCommandHandler(deps) {
   let agentHandle = null
   // 当前活跃的隔离会话 id（route 清理用，取自创建时生成的 sessionId）
   let activeAgentSessionId = null
-  // 最近一次退出时的回绑结果（供回执说明是否已回到聊天会话）
-  let exitBinding = null
+  // 注：退出回执的结果**不**放模块级变量。曾经有 `let exitBinding = null` +
+  // handleStop 开头复位；但 handleStop 对它是无条件赋值、且赋值先于任何读取，
+  // 所以那行复位是**不可达的死代码**（实测：单独删掉它，全部用例仍绿）。
+  // 更彻底的做法是让结果只作为**本次调用的返回值**流动——见 handleStop 的 return。
+  // 这样「回执只反映本次退出」由结构保证，不再依赖「记得复位」这种纪律。
 
   /** 判断文本是否为命令。 */
   function isCommand(text) {
@@ -222,10 +225,6 @@ export function createCommandHandler(deps) {
    * 退出 agent 模式：归档 + 删文件 + dispose 隔离会话 + 自动 bind 回聊天会话。
    */
   async function handleStop() {
-    // 0. 复位上一次的退出回执结果。
-    //    不复位会留一个因果耦合：exitBinding 会跨调用残留，
-    //    若将来有人改掉上面那道 isAgentMode() 早退，残留值会被误读成本次的结果。
-    exitBinding = null
     // 1. 归档对话到记忆库 + 删文件（由 agent 服务处理）
     try {
       const rounds = (deps.pendingAgentRounds ?? []).filter((r) => r.user || r.assistant)
@@ -240,7 +239,7 @@ export function createCommandHandler(deps) {
     //    回绑失败时**绝不**留下「mode=chat 但绑定还指着隔离会话」的漂移：
     //    旧实现只在失败时 warn 一句就继续 exitAgent()，QQ 会继续投隔离会话，
     //    而上下文注入只在聊天模式生效 → 听雪对着一个空壳会话说话。
-    exitBinding = await writeExitBinding(channel, userId, state.chatSessionId, stateFile, warn)
+    const exitBinding = await writeExitBinding(channel, userId, state.chatSessionId, stateFile, warn)
     if (exitBinding.cleared) {
       info('退出 agent 模式：回绑失败，已清空绑定键（避免 QQ 继续投隔离会话）')
     }
@@ -251,6 +250,12 @@ export function createCommandHandler(deps) {
     // 4. 清理隔离残留（删路由 + 延迟 dispose 会话；dispose 务必在绑定处理之后，
     //    否则会出现「绑定指向已销毁会话」的窗口）
     disposeActiveIsolation()
+
+    // 5. 把本次结果交回调用方。回执**只**读这个返回值（见 handle 的 /agentstop 分支）。
+    //    为什么不做成模块级变量 + 每次复位：那样「回执只反映本次退出」就依赖
+    //    「记得复位」这条纪律，而且复位行本身可能是不可达的死代码（本仓库实测踩过）。
+    //    返回值是每调用一份，结构上不存在跨调用残留与并发交叠。
+    return exitBinding
   }
 
   /**
@@ -338,14 +343,14 @@ export function createCommandHandler(deps) {
         await push('当前不在 agent 模式。')
         return true
       }
-      await handleStop()
-      if (exitBinding && !exitBinding.ok) {
-        if (exitBinding.unresolved) {
+      const stopResult = await handleStop()
+      if (stopResult && !stopResult.ok) {
+        if (stopResult.unresolved) {
           await push([
             '已退出 agent 模式，但 QQ 绑定既未回绑也没能清空（写盘持续失败）。',
             '请再发一句话给听雪——若收不到回复，说明绑定仍指向已销毁的隔离会话；此时重发 /agentstart 再 /agentstop 即可复位。',
           ].join('\n'))
-        } else if (exitBinding.cleared) {
+        } else if (stopResult.cleared) {
           await push('已退出 agent 模式。注意：回绑聊天会话失败，已清空绑定——请给听雪发条消息确认收到。')
         } else {
           await push('已退出 agent 模式，回到日常聊天。')

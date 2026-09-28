@@ -21,24 +21,57 @@
 //   node scripts/selfcheck.mjs --full       # 解全部日志帧（默认只解尾部 2000 帧，快）
 //   node scripts/selfcheck.mjs --data-dir <path>
 
-import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
+import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { zstdDecompressSync } from 'node:zlib'
-import { join, dirname } from 'node:path'
+import { join, dirname, relative, sep, resolve } from 'node:path'
 import { homedir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 
 const ARGS = process.argv.slice(2)
 const AS_JSON = ARGS.includes('--json')
 const FULL = ARGS.includes('--full')
 const argVal = (name) => {
+  // 同时支持 `--name value` 与 `--name=value`：脚本既被人手敲，也被测试拼参数。
+  const eq = ARGS.find((a) => a.startsWith(`${name}=`))
+  if (eq) return eq.slice(name.length + 1)
   const i = ARGS.indexOf(name)
   return i >= 0 && ARGS[i + 1] ? ARGS[i + 1] : undefined
 }
+/** `--only=freshness,injection`：只跑指定检查（测试用来把判据隔离出来，不依赖在跑的服务）。 */
+const ONLY = (() => {
+  const raw = argVal('--only')
+  if (!raw) return null
+  const set = new Set(String(raw).split(',').map((s) => s.trim()).filter(Boolean))
+  return set.size ? set : null
+})()
+const wants = (k) => !ONLY || ONLY.has(k)
+/**
+ * `--started=<ISO 时刻 | epoch 毫秒>`：覆盖「DSH 进程启动时刻」。
+ * 默认从监听 3080 的进程反查（真机行为不变）。存在的理由是**可证伪**：
+ * 新鲜度的第二条判据（副本写入是否晚于进程启动）只有在能把 started 摆到
+ * 副本写入时刻两侧时才能证明它会翻转 —— 测试与人工诊断都需要这个旋钮。
+ */
+const STARTED_ARG = (() => {
+  const raw = argVal('--started')
+  if (!raw) return undefined
+  const t = String(raw).trim()
+  const n = Number(t)
+  // 纯数字按 epoch 毫秒解释，其余按日期串解释
+  const d = (t !== '' && Number.isFinite(n)) ? new Date(n) : new Date(t)
+  return Number.isNaN(d.getTime()) ? undefined : d
+})()
 
 const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), '.dsh')
 const MEMORY_PORT = 8766
 const DASH_PORT = 8765
 const WEB_PORT = 3080
+const PLUGIN_NAME = 'dsh-tingxue'
+
+/** 仓库根 = 本脚本所在目录的上一级（scripts/ → 仓库根）。 */
+const HERE = dirname(fileURLToPath(import.meta.url))
+const REPO_DIR = argVal('--repo-dir') ?? join(HERE, '..')
 
 const findings = []   // { level: 'ok'|'warn'|'fail', title, detail }
 const ok = (title, detail = '') => findings.push({ level: 'ok', title, detail })
@@ -193,31 +226,304 @@ function resolveDataDir() {
 
 // ---------- 各项检查 ----------
 
-async function checkProcessFreshness() {
-  const rtDir = join(DSH_HOME, 'profiles', 'web', 'node_modules', 'dsh-tingxue')
-  const src = join(rtDir, 'src', 'plugin-entry.mjs')
-  const inject = join(rtDir, 'src', 'context', 'inject.mjs')
-  const started = listenerStartTime(WEB_PORT)
+/** 该路径是否「进程启动时会加载」——决定它算不算新鲜度判据的一部分。 */
+const RUNTIME_DIRS = ['src', 'client']
+const RUNTIME_SINGLE = ['cordis.patch.yml']
 
-  if (!existsSync(src)) {
-    warn('运行时副本', `没找到 ${src}；无法判断加载的是哪份代码`)
-    return { started, newest: null }
+/** 递归列出目录下所有文件的相对路径（POSIX 分隔符，排序稳定）。 */
+function walkRel(dir, base = dir, acc = []) {
+  let entries
+  try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return acc }
+  for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const p = join(dir, e.name)
+    if (e.isDirectory()) walkRel(p, base, acc)
+    else if (e.isFile()) acc.push(relative(base, p).split(sep).join('/'))
   }
-  const newest = Math.max(statSync(src).mtimeMs, existsSync(inject) ? statSync(inject).mtimeMs : 0)
-  const newestStr = new Date(newest).toISOString()
+  return acc
+}
 
-  if (!started) {
-    warn('进程启动时间未知', '拿不到监听 3080 的进程启动时间（netstat/Get-Process 不可用）。请人工确认：DSH 是否在源码改动之后重启')
-    return { started: null, newest }
+/** 文件内容的 sha256（读不到返回 null）。 */
+function sha256File(file) {
+  try { return createHash('sha256').update(readFileSync(file)).digest('hex') } catch { return null }
+}
+
+/** git 的 blob 对象哈希（= sha1("blob <len>\0" + content)）。与 `git hash-object` 逐字节一致。 */
+function gitBlobHash(file) {
+  try {
+    const buf = readFileSync(file)
+    return createHash('sha1').update(`blob ${buf.length}\0`).update(buf).digest('hex')
+  } catch { return null }
+}
+
+/** HEAD 里该路径的 blob 哈希（不是 git 仓库/文件未跟踪/无 HEAD 时返回 null）。 */
+function headBlobHash(repoDir, rel) {
+  try {
+    const out = execFileSync('git', ['-C', repoDir, 'rev-parse', `HEAD:${rel}`], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30000, windowsHide: true,
+    }).trim()
+    return out || null
+  } catch { return null }
+}
+
+/** 仓库是不是可用 git 工作树。 */
+function isGitRepo(repoDir) {
+  try {
+    execFileSync('git', ['-C', repoDir, 'rev-parse', '--is-inside-work-tree'], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30000, windowsHide: true,
+    })
+    return true
+  } catch { return false }
+}
+
+/**
+ * 运行新鲜度判定：**内容哈希 + 副本写入时刻**（两条判据并存，互不覆盖）。
+ *
+ * 背景：profile 用 `file:` 协议 + `nodeLinker: hoisted`，运行副本是**真实目录拷贝**
+ * （不是 junction），改仓库永不自动传播。所以「要不要重启 DSH」由两件事共同决定：
+ * 副本内容对不对（判据①），以及**进程是不是在副本最后一次写入之后启动的**（判据②）。
+ *
+ * ── 判据①（t8 成果，内容哈希；不得回退）──────────────────────────────
+ * 只看内容，不看 mtime，因为纯 mtime 判据在**两个方向**上都实测失效：
+ *   a) 静默放行：仓库改了、副本没同步 → 副本 mtime 反而更旧 → mtime 判据报「一切正常」。
+ *      这恰是它本该守住的场景（最严重的失效模式）。
+ *   b) 误报（**仓库侧**）：仓库文件同内容重写会让**仓库** mtime 变新；实测副本
+ *      `src/plugin-entry.mjs` 内容与仓库逐字节相同、`git log a41090c..HEAD -- <file>`
+ *      无输出，仅因 mtime 晚于进程启动就被判「需要重启」—— 纯误报。
+ *   结论：**仓库侧** mtime 绝不参与判定；这一半必须保住。
+ *
+ * ── 判据②（本次修复；副本写入时刻 vs 进程启动）────────────────────────
+ * 判据①只回答「副本内容 == 仓库内容吗」，**完全不回答「进程有没有加载到它」**。
+ * 于是出现「时间盲假绿」（T9-F1）：副本 `src/plugin-entry.mjs` 写于 19:24:44、
+ * 进程起于 18:13:29（副本晚 71 分钟）——Node 在 import 期就加载完了模块，该进程
+ * **不可能**持有同步后的内容，而旧代码照样输出「运行代码是最新的」。真机复现见下。
+ *   所以：**副本里运行时文件的最后写入时刻 > 进程启动时刻 → 必须报「需要重启」**。
+ * 这一条与判据①不冲突：判据①管「内容对不对」，判据②管「进程装的是不是那份内容」。
+ * 特别注意 ②用的是**副本侧**写入时刻，与 a/b 两个失效模式（仓库侧 mtime）无关，
+ * 所以它不会把判据①好不容易修好的「同内容重写不误报」重新引入。
+ *
+ * 三法互证（`git rev-parse HEAD:<path>`）：能区分「副本 == HEAD（未提交在制品还没同步）」
+ * 与「副本 == 工作树但工作树未提交」，给出更准确的处置建议。两个方向都检：
+ * 副本落后于仓库（漏同步）**与**副本有多余文件。
+ *
+ * ── T9-F2：为什么 `scripts/` **不**纳入新鲜度比对 ──────────────────────
+ * 结论：`scripts/` 不属于运行时加载路径，**不该**纳入。依据（三条都是可复核的事实）：
+ *   1. `package.json` 的 `main` = `src/plugin-entry.mjs`、`exports` 只映射
+ *      `.` → `src/plugin-entry.mjs` 与 `./client` → `client/client.js`；`scripts/`
+ *      不在任何入口映射里，宿主 import 不到它。
+ *   2. 全仓 `src/**` 与 `client/**` 对 `scripts/` 的引用数为 **0**（grep 可复核）：
+ *      没有任何运行时模块 import 它。它是**旁路诊断工具**，只被人手 `node scripts/...` 跑。
+ *   3. 运行副本里的 `scripts/selfcheck.mjs` 是**随包发布的副本**（`package.json`
+ *      `files` 含 `scripts/selfcheck.mjs`），本仓库改动后天然会落后（真机实测：
+ *      副本 32,206 B vs 仓库 33,937 B）。**若纳入比对，每一次正常开发都会因为
+ *      「副本里的诊断脚本不是最新的」而报 fail，而运行中的 DSH 一点问题都没有** ——
+ *      这正是制造假警报。
+ *   判据②同理只该看**运行时文件**（`src/`、`client/`、`cordis.patch.yml`）：进程只加载
+ *   这些；拿 `scripts/` 的写入时刻去比进程启动时刻同样会假报「需要重启」。
+ *   （真机实测 `scripts/selfcheck.mjs` 副本写入 18:35:03，晚于进程启动 18:13:29 —— 若把它
+ *   算进判据②，会在 DSH 完全健康时报需要重启。）
+ *
+ * 只读零成本：只 stat/readFile + 可选的 `git rev-parse`，不写文件、不发网络请求。
+ */
+function checkProcessFreshness(opts = {}) {
+  const rtDir = opts.runtimeDir ?? join(DSH_HOME, 'profiles', 'web', 'node_modules', PLUGIN_NAME)
+  const started = opts.started !== undefined ? opts.started : listenerStartTime(WEB_PORT)
+  const repoDir = opts.repoDir ?? REPO_DIR
+
+  const rtProbe = join(rtDir, 'src', 'plugin-entry.mjs')
+  const repoProbe = join(repoDir, 'src', 'plugin-entry.mjs')
+  if (!existsSync(rtProbe)) {
+    warn('运行时副本', `没找到 ${rtProbe}；无法判断加载的是哪份代码`)
+    return { started, mode: 'hash', runtimeDir: rtDir, repoDir, compared: 0 }
+  }
+  if (!existsSync(repoProbe)) {
+    warn('运行时副本', `没找到仓库源码 ${repoProbe}（可用 --repo-dir 指定仓库根）；无法比对`)
+    return { started, mode: 'hash', runtimeDir: rtDir, repoDir, compared: 0 }
+  }
+  // 防呆：运行副本里也带着 scripts/selfcheck.mjs，所以从副本目录里跑本脚本时
+  // `REPO_DIR`（= 脚本上一级）会解析成**副本自己** → 自己跟自己比，永远「一致」，
+  // 给出假的安心结论。这种自指比对必须明确拒绝，而不是报绿。
+  try {
+    if (resolve(rtDir) === resolve(repoDir)) {
+      warn('仓库与运行副本是同一个目录',
+        `${repoDir} 既是仓库又被当成运行副本 —— 自己跟自己比永远一致，结论无意义。` +
+        `请用 --repo-dir 指定真实仓库根（从副本里跑本脚本时尤其要注意）`)
+      return { started, mode: 'hash', runtimeDir: rtDir, repoDir, compared: 0, selfReferential: true }
+    }
+  } catch { /* resolve 失败则跳过该防呆 */ }
+
+  // ---- 逐文件内容哈希比对（两个方向）----
+  const missingInRuntime = []   // 仓库有、副本没有 → 副本落后
+  const changed = []            // 两边都有但内容不同
+  const extraInRuntime = []     // 副本有、仓库没有 → 副本多余
+  const headMismatch = []       // 副本 != HEAD（说明副本装的是历史版本，或在制品没同步）
+  const canGit = isGitRepo(repoDir)
+  let compared = 0
+
+  for (const relDir of RUNTIME_DIRS) {
+    const a = join(rtDir, relDir)
+    const b = join(repoDir, relDir)
+    if (!existsSync(b)) continue
+    if (!existsSync(a)) { missingInRuntime.push(`${relDir}/`); continue }
+    const rtSet = new Set(walkRel(a))
+    const repoSet = new Set(walkRel(b))
+    for (const rel of repoSet) {
+      const full = `${relDir}/${rel}`
+      if (!rtSet.has(rel)) { missingInRuntime.push(full); continue }
+      compared++
+      const hr = sha256File(join(b, rel))       // b = 仓库（期望）
+      const ht = sha256File(join(a, rel))       // a = 运行副本（实际）
+      if (hr !== ht) {
+        const head = canGit ? headBlobHash(repoDir, full) : null
+        // runtimeMatchesHead=true 表示「副本是 HEAD 那份，差异来自仓库的未提交在制品」
+        changed.push({
+          file: full, repoHash: hr, runtimeHash: ht,
+          runtimeMatchesHead: head !== null && gitBlobHash(join(a, rel)) === head,
+        })
+      }
+    }
+    for (const rel of rtSet) if (!repoSet.has(rel)) extraInRuntime.push(`${relDir}/${rel}`)
   }
 
-  const fmt = (d) => d.toLocaleString('zh-CN', { hour12: false })
-  if (started.getTime() >= newest) {
-    ok('运行代码是最新的', `DSH 启动 ${fmt(started)} ≥ 源码改动 ${fmt(new Date(newest))}`)
+  for (const rel of RUNTIME_SINGLE) {
+    const a = join(rtDir, rel)
+    const b = join(repoDir, rel)
+    if (!existsSync(b)) { if (existsSync(a)) extraInRuntime.push(rel); continue }
+    if (!existsSync(a)) { missingInRuntime.push(rel); continue }
+    compared++
+    const hr = sha256File(b)
+    const ht = sha256File(a)
+    if (hr !== ht) {
+      const head = canGit ? headBlobHash(repoDir, rel) : null
+      changed.push({
+        file: rel, repoHash: hr, runtimeHash: ht,
+        runtimeMatchesHead: head !== null && gitBlobHash(a) === head,
+      })
+    }
+  }
+
+  // 三法互证：副本内容是否等于 HEAD（能区分「未提交在制品」与「历史版本」）
+  if (canGit) {
+    for (const rel of [...RUNTIME_DIRS.flatMap((d) => {
+      const b = join(repoDir, d)
+      return existsSync(b) ? walkRel(b).map((r) => `${d}/${r}`) : []
+    }), ...RUNTIME_SINGLE]) {
+      const head = headBlobHash(repoDir, rel)
+      if (head === null) continue               // 未跟踪/不在 HEAD：跳过
+      const rtH = gitBlobHash(join(rtDir, rel))
+      if (rtH !== null && rtH !== head) headMismatch.push(rel)
+    }
+  }
+
+  // ---- 判据②：运行副本里「运行时文件」的最新写入时刻 ----
+  //
+  // 只看运行时加载路径（src/、client/、cordis.patch.yml）——**不含 scripts/**（理由见上方 T9-F2）。
+  // 进程只加载这些文件，所以只有它们的写入时刻能决定「进程装的是不是这份内容」。
+  const rtNewest = (() => {
+    let best = null
+    const rels = RUNTIME_DIRS.flatMap((d) => {
+      const a = join(rtDir, d)
+      return existsSync(a) ? walkRel(a).map((r) => `${d}/${r}`) : []
+    }).concat(RUNTIME_SINGLE)
+    for (const rel of rels) {
+      try {
+        const st = statSync(join(rtDir, rel))
+        if (st.isFile() && (!best || st.mtimeMs > best.mtimeMs)) {
+          best = { file: rel, mtimeMs: st.mtimeMs, mtime: st.mtime }
+        }
+      } catch { /* 读不到就跳过该文件 */ }
+    }
+    return best
+  })()
+
+  // 副本写入 vs 进程启动。留 2s 容差吸收文件系统时间戳粒度（NTFS/FAT 与时钟抖动），
+  // 避免亚秒级粒度造成假报；真正的「同步后才写」至少差秒级，真机实测差 71 分钟。
+  const MTIME_SLACK_MS = 2000
+  const copyLagMs = (started && rtNewest) ? (rtNewest.mtimeMs - started.getTime()) : null
+  const runtimeNewerThanProcess = copyLagMs !== null && copyLagMs > MTIME_SLACK_MS
+
+  const short = (h) => (h ? h.slice(0, 12) : '(读不到)')
+  const brief = (a, n = 5) => `${a.slice(0, n).join('、')}${a.length > n ? `…（共 ${a.length} 个）` : ''}`
+  const fmt = (d) => (d ? d.toLocaleString('zh-CN', { hour12: false }) : '未知')
+  const fmtMin = (ms) => `${Math.round(ms / 60000)} 分钟`
+
+  const inSync = missingInRuntime.length === 0 && changed.length === 0 && extraInRuntime.length === 0
+
+  // ---- 判定 ----
+  if (inSync) {
+    ok('运行副本与仓库源码一致（内容哈希）',
+      `${compared} 个文件哈希全等；改仓库仍需「同步副本 + 重启 DSH」才生效`)
+    if (!started) {
+      warn('进程启动时间未知', '拿不到监听 3080 的进程启动时间（netstat/Get-Process 不可用）。请人工确认：DSH 是否在源码改动之后重启')
+    } else if (runtimeNewerThanProcess) {
+      // 判据②命中：内容一致但进程不可能加载到它 —— 这正是 T9-F1 的时间盲假绿。
+      fail('需要重启 DSH —— 副本在进程启动后被写入',
+        `副本最新写入的是 ${rtNewest.file}：${fmt(rtNewest.mtime)}；` +
+        `而 DSH 进程启动于 ${fmt(started)} —— 副本晚 ${fmtMin(copyLagMs)}。` +
+        `Node 在 import 期就加载完了模块，所以该进程**装的仍是写入前的那份内容**；` +
+        `副本内容虽与仓库一致，也必须**重启 DSH** 才真正生效。` +
+        `（自检本身只读，不会替你重启）`)
+    } else {
+      ok('运行代码是最新的',
+        `DSH 启动 ${fmt(started)}；副本最新写入 ${fmt(rtNewest?.mtime)} 早于进程启动；` +
+        `且副本内容 == 仓库工作树（不看仓库侧 mtime，故同内容重写不误报）`)
+    }
   } else {
-    fail('运行代码是旧的 —— 需要重启 DSH', `DSH 启动 ${fmt(started)} < 源码改动 ${fmt(new Date(newest))}；当前进程加载的是改动前的代码`)
+    const parts = []
+    if (missingInRuntime.length) parts.push(`副本缺 ${missingInRuntime.length} 个文件：${brief(missingInRuntime)}`)
+    if (changed.length) parts.push(`${changed.length} 个文件内容不同：${brief(changed.map((c) => c.file))}`)
+    if (extraInRuntime.length) parts.push(`副本多 ${extraInRuntime.length} 个文件：${brief(extraInRuntime)}`)
+    const detail = []
+    for (const c of changed.slice(0, 5)) {
+      detail.push(`  ${c.file}：期望(repo)=${short(c.repoHash)} 实际(copy)=${short(c.runtimeHash)}`)
+    }
+    const fix = `运行副本是**真实目录拷贝**（profile 用 file: 协议 + nodeLinker: hoisted），改仓库不会自动生效。` +
+      `修法：把仓库 ${changed.length + missingInRuntime.length > 0 ? '相应文件' : '目录'} 覆盖同步到 ${rtDir}，然后**重启 DSH** 才生效。` +
+      `（自检本身只读，不会替你同步）`
+    fail('运行副本与仓库源码不一致 —— 跑的是旧代码',
+      `${parts.join('；')}\n${detail.join('\n')}\n${fix}`)
+    // 判据②与判据①并存：内容不一致时若副本还比进程新，追加一条独立的时点提醒。
+    // 两条判据各自出结论，绝不互相覆盖（内容问题 → fail 已给出；时点问题 → 这里补 warn）。
+    if (runtimeNewerThanProcess) {
+      warn('副本写在进程启动之后（内容也不一致）',
+        `${rtNewest.file} 写入于 ${fmt(rtNewest.mtime)}，晚于 DSH 启动 ${fmt(started)} ${fmtMin(copyLagMs)}；` +
+        `同步副本后**必须重启 DSH**，否则进程仍持有旧模块`)
+    }
+    // 三法互证：给出更准确的处置建议
+    if (canGit && headMismatch.length > 0) {
+      const allUncommitted = changed.length > 0 && changed.every((c) => c.runtimeMatchesHead)
+      if (allUncommitted) {
+        warn('差异全是未提交的在制品',
+          `${brief(changed.map((c) => c.file))}：运行副本 == HEAD，差异**全部**来自仓库的未提交改动；` +
+          `**要生效必须先提交 + 同步副本 + 重启 DSH**（已提交的那份与副本是自洽的，交付态没坏）`)
+      } else {
+        warn('副本内容 != HEAD',
+          `${brief(headMismatch)}；副本装的可能不是当前提交版本，建议重新同步（仓库 → 副本 → 重启 DSH）`)
+      }
+    } else if (!canGit) {
+      warn('无法用 git 三法互证', `${repoDir} 不是 git 工作树，无法区分「未提交在制品」与「历史版本」；按保守一律判不一致`)
+    }
   }
-  return { started, newest, newestStr }
+
+  return {
+    started,
+    mode: 'hash',
+    runtimeDir: rtDir,
+    repoDir,
+    compared,
+    inSync,
+    // 判据②（副本写入 vs 进程启动）的可见结果 —— 验收要求「必须随之翻转」可被直接断言
+    runtimeNewest: rtNewest ? { file: rtNewest.file, mtime: rtNewest.mtime.toISOString() } : null,
+    runtimeNewestMs: rtNewest ? rtNewest.mtimeMs : null,
+    startedMs: started ? started.getTime() : null,
+    copyLagMs,
+    mtimeSlackMs: MTIME_SLACK_MS,
+    runtimeNewerThanProcess,
+    needsRestart: runtimeNewerThanProcess,
+    missingInRuntime: missingInRuntime.slice(0, 20),
+    changed: changed.map((c) => ({ file: c.file, repoHash: short(c.repoHash), runtimeHash: short(c.runtimeHash), runtimeMatchesHead: c.runtimeMatchesHead })),
+    extraInRuntime: extraInRuntime.slice(0, 20),
+    headMismatch: headMismatch.slice(0, 20),
+  }
 }
 
 function checkSlidingWindow(dataDir) {
@@ -342,17 +648,32 @@ function checkInjection(state, dataDir, procStart) {
   const scopeNote = afterBoot.length
     ? (procStart ? `本次启动(${procStart.toLocaleTimeString('zh-CN', { hour12: false })})之后` : '')
     : '（拿不到启动时间，改用最近 6 轮）'
-
+  // scopeNote 为「本次启动(...)之后」/「（拿不到启动时间，改用最近 6 轮）」/ 空串。
+  // 空串出现在「有启动后的回合、但拿不到启动时间」的分支，此时给一句可读的兜底，
+  // 否则输出会长成「的 1 轮全部只有…」这种断头句。
   const recent = afterBoot.length ? afterBoot : judged.slice(-6)
+  const scopeText = scopeNote || `本次窗口（${recent.length} 轮）`
   const drifted = recent.filter((t) => t.drifted)
+  // 判别力（复核 finding F3）：漂移判据是「同一轮内 system 长度出现多个值」，而长度是从
+  // 该轮的 headers 去重来的 —— **只有 headerCount >= 2 的回合才可能观察到轮内漂移**。
+  // 若窗口内全是单表头回合，drifted 必然为 0：那是「没能力看见」，不是「没问题」。
+  // 这种绿灯是最危险的假绿灯（把无判别力当成修复有效的证据），所以必须单独计数并降级。
+  const observable = recent.filter((t) => t.headerCount >= 2)
 
   if (drifted.length > 0) {
     fail('注入在同轮内变动（记忆块会消失）',
-      `${scopeNote}的 ${recent.length} 轮里有 ${drifted.length} 轮 system 轮内变动：` +
+      `${scopeText}的 ${recent.length} 轮里有 ${drifted.length} 轮 system 轮内变动：` +
       drifted.map((t) => `turn ${t.turn}(${t.lens.join('→')})`).join('、'))
+  } else if (observable.length === 0) {
+    warn('注入轮内恒定（本次窗口无判别力）',
+      `${scopeText}的 ${recent.length} 轮**全部只有 1 个 request/header**（headerCount 均 < 2），` +
+      `单表头回合不可能观察到轮内漂移 —— 故本次 0 漂移**不能**作为「修复有效」的证据。` +
+      `请在一个多 step（每 step 各发一次 header）的回合之后重跑，或改用更长的 --full 窗口。`)
   } else {
-    const lens = [...new Set(recent.map((t) => t.sysLen))]
-    ok('注入轮内恒定', `${scopeNote}${recent.length} 轮均无轮内变动；system 长度 ${lens.join(' / ')}`)
+    const lens = [...new Set(observable.map((t) => t.sysLen))]
+    ok('注入轮内恒定',
+      `${scopeText}具备观测能力的 ${observable.length}/${recent.length} 轮（headerCount ≥ 2）均无轮内变动；` +
+      `system 长度 ${lens.join(' / ')}`)
   }
 
   return {
@@ -364,8 +685,12 @@ function checkInjection(state, dataDir, procStart) {
       changes: t.changes, lens: t.lens,
       mems: t.mems.map((m) => (m ? 'Y' : '-')),
       sysLen: t.sysLen, drifted: t.drifted,
+      observable: t.headerCount >= 2,
     })),
     driftedInScope: drifted.length,
+    // 具备观测能力（headerCount >= 2）的回合数；为 0 时上面那条判定已降级为 warn
+    observableTurns: observable.length,
+    observableTurnsInScope: observable.map((t) => t.turn),
     turnsTotal: judged.length,
     lastSysLen: judged[judged.length - 1]?.sysLen,
     // 历史遗留（修复前的回合），仅供参考，不作为判定
@@ -413,12 +738,14 @@ async function main() {
   const dataDir = resolveDataDir()
   const cfg = readProfileConfig()
 
-  const proc = await checkProcessFreshness()
-  const state = checkSlidingWindow(dataDir)
-  checkBinding(state, dataDir)
-  await checkEndpoints(dataDir)
+  // freshness = 运行副本新鲜度（内容哈希）；injection = 同轮漂移判定。
+  // `--only=` 让测试能把这两条判据单独跑出来，不依赖在跑的服务/日志。
+  const proc = wants('freshness') ? checkProcessFreshness(STARTED_ARG !== undefined ? { started: STARTED_ARG } : {}) : null
+  const state = wants('injection') ? checkSlidingWindow(dataDir) : null
+  if (wants('binding')) checkBinding(state, dataDir)
+  if (wants('endpoints')) await checkEndpoints(dataDir)
 
-  const inj = checkInjection(state, dataDir, proc?.started ?? null)
+  const inj = wants('injection') ? checkInjection(state, dataDir, proc?.started ?? null) : null
   if (inj?.log) {
     const { events } = loadEvents(inj.log, FULL ? null : 2000)
     checkNoDuplicateDshPrompt(events)
@@ -432,7 +759,7 @@ async function main() {
     console.log(JSON.stringify({
       ok: fails.length === 0,
       dataDir, profile: cfg.path, config: cfg,
-      findings, injection: inj,
+      findings, freshness: proc, injection: inj,
       summary: { fail: fails.length, warn: warns.length, ok: findings.length - fails.length - warns.length },
     }, null, 2))
   } else {
@@ -485,4 +812,9 @@ if (isMain) {
   })
 }
 
-export { analyzeTurns, judgeTurn, loadEvents, findSessionLog }
+export {
+  analyzeTurns, judgeTurn, loadEvents, findSessionLog,
+  // 新鲜度判据（内容哈希）——测试直接驱动，不必依赖真机 profile
+  checkProcessFreshness, sha256File, gitBlobHash, headBlobHash, walkRel, isGitRepo,
+  RUNTIME_DIRS, RUNTIME_SINGLE, PLUGIN_NAME,
+}

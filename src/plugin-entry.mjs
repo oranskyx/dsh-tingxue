@@ -491,14 +491,37 @@ export function apply(ctx, config = {}) {
     return typeof id === 'string' && id === chatSessionId
   }
 
-  // 两个输入变量，别合并（下面两处监听器分别写它们）：
+  // 两个输入变量，别合并（下面几处监听器分别写它们）：
   //   lastUserText —— 「待配对输入」：AI 回复后配对成一轮写进滑动窗口 + 记忆，随后清空。
-  //   turnInput    —— 「本轮输入」：整轮不变，供检索输入与缓存键使用。
+  //   turnInput    —— 「本轮输入」：供检索输入与缓存键使用。**它必须整轮恒定**，
+  //                    由下面的 turnInputTurn 保证（见该处注释）。
   // 合并的后果：assistant/message 每个 step 都触发，step0 结束就清空 lastUserText，
   // 于是 step1 的检索输入成了空串 → 记忆块在同一轮里突然消失
   // （实测同一轮 15817 → 13872，掉的 1945 字符正是记忆块）。
   let lastUserText = ''
   let turnInput = ''
+  // turnInput 的「权威值」按 turn 锁定：
+  //   turnInputTurn —— turnInput 当前锁在哪个 turn（null = 还没锁过）；
+  //                    turnInput 本身就是那个 turn 的检索输入。
+  //                    **优先**取该 turn 第一条 source.kind === 'user'（主人的真实输入）
+  //                    的消息；整批无人类输入时才退回第一条被 claim 的消息（兜底）。
+  // 为什么必须锁：agent/inbox/inserted 对**每一条**进 inbox 的消息都触发——包括 turn
+  // 中途作为 next-step 插进来的 AgentTeams 派单、后台子代理完成通知。这些消息会把
+  // turnInput 改写成通知文本，于是同一个 turn 内 system-prompt 的检索键变了：
+  // 记忆块被换成**另一次检索**的结果。真机实测 turn 145：
+  //   step1 header 22177（记忆块提到 c54f…）→ 中途插入 a75f2cb8 通知 →
+  //   step2 header 22272（记忆块变成 2d83…）—— 同一 turn 出现两个 system 长度。
+  let turnInputTurn = null
+  // 锁定值是否「权威」：
+  //   true  —— turnInput 取自本 turn 第一条 **主人的真实输入**（source.kind === 'user'）。
+  //   false —— 只是兜底：本 turn 到这一刻还没有人类输入，暂用第一条被 claim 的消息。
+  // 为什么要区分：DSH 的 claim() 先 splice 全部 next-step、**再**推 next-turn，然后按
+  // 该顺序逐个 emit claimed（packages/core/agent/src/inbox.ts:71-77）。所以当本 turn
+  // 第一步的批次里混着一条 next-step 通知时，batch[0] 是通知，主人的话排在它后面。
+  // 只认 batch[0] 会让整个 turn 用**通知文本**去检索记忆——真实危害（实测 4 个回合：
+  // turn 81/102/123/148，被锁成 query 的是 user-approval / subagent-settled 通知，
+  // 主人的原话就在同一批次里被丢掉）。所以兜底值必须在主人开口后被**升级**。
+  let turnInputAuthoritative = false
 
   /**
    * 真正做检索与组装。返回 null 表示「此刻不该算」（未 ready / agent 模式）：
@@ -530,7 +553,21 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  // 按「本轮输入」缓存：同一句输入只算一次（多步回合不重复 embed + 向量检索）。
+  // 按「本轮输入」缓存：同一 turn 只算一次（多步回合不重复 embed + 向量检索）。
+  //
+  // 关于 createContextCache 的 invalidate()：本文件**刻意不调用**它。
+  // 先澄清它到底做什么（复核 finding F4 指出早先注释说反了）：invalidate() 会把
+  // cachedInput 置回 undefined（src/context/inject.mjs:86-89），即**清掉缓存键的有效性
+  // 状态**、并递增 gen 让在途的旧组装回来时无法落缓存 —— 它不是「只递增代号而不换键」。
+  // 之所以无需调用，是因为正确性已经由键保证：缓存命中条件是 `cachedInput === getInput()`
+  // （同文件 :50），而 getInput() 就是 turnInput，turnInput 已按 turn 锁定（见
+  // agent/inbox/claimed 监听器）。于是「换 turn」本身就等价于「换键」，旧结果天然不会被
+  // 复用；在这个前提下 getInput() 的变化已足以让缓存失效，不需要额外的 invalidate。
+  // 反过来在这里调用它只有坏处：它会把「同一 turn 内已预热好的结果」丢掉、下次装配重算
+  // 一遍（白付一次 embed + 检索），且并不带来任何额外的正确性。
+  // 因此 invalidate 保留给「键不变但值必须重算」的场景（本文件下方 agent 模式自愈用的
+  // ensureContextText(true) 走的是 force 分支），不用于 turn 切换。
+  // 全仓调用点仅测试两处（test/inject.test.mjs 的 invalidate 用例），无产品路径依赖它。
   const contextCache = createContextCache({
     getInput: () => turnInput,
     build: buildContextText,
@@ -566,9 +603,8 @@ export function apply(ctx, config = {}) {
     }
   }
   // 每轮只做「agent 模式自愈」这一件事，不再碰缓存。
-  // 缓存作废 + 预热都在下面那个「记录 lastUserText」的监听器里做：
-  // 两个监听器的注册顺序决定了 here 跑在 lastUserText 更新之前，若在此
-  // invalidate，会把紧接着预热好的结果又丢掉，白白多检索一次。
+  // 检索输入的锁定与预热都在上面的 agent/inbox/claimed 监听器里做；
+  // 缓存键随 turn 变化（turnInput 按 turn 锁定），无需在此 invalidate。
   const refreshDisposer = ctx.on('agent/inbox/inserted', (payload) => {
     if (!ready || !isChatAgent(payload?.agent)) return
     if (state?.isAgentMode?.()) reconcileAgentMode().catch(() => {})
@@ -655,7 +691,6 @@ export function apply(ctx, config = {}) {
   // 隔离：只有「绑定聊天会话」的用户消息才记录；其他 DSH 会话（含 agent 隔离会话）
   // 的消息绝不能覆盖 lastUserText——否则会被当成聊天会话的用户话，串进上下文组装
   // 或写进记忆库（跨会话数据污染）。
-  // （lastUserText / turnInput 声明见上方「上下文注入」段。）
   const userEventDisposer = ctx.on('agent/inbox/inserted', (payload) => {
     if (!ready || !isChatAgent(payload?.agent)) return
     try {
@@ -663,18 +698,87 @@ export function apply(ctx, config = {}) {
       const text = message?.content?.find?.((b) => b.type === 'text')?.text ?? ''
       if (!text || commands?.isCommand?.(text)) return
       lastUserText = text
-      turnInput = text
-      // 就在这里预热：此刻输入已是这条新消息，检索用对输入。
-      // 不 await——让它与 agent 循环并发跑，把 embed + 向量检索的约 0.8s 藏起来；
-      // 随后 system-prompt/assemble 瀑布 await 的是同一个 in-flight promise
-      // （createContextCache 按输入去重），所以既不重复检索也不丢正确性。
-      //
-      // 不吞错：buildContextText 内部已 catch 并 warn，能走到这里的都是意外异常。
-      // 静默丢弃会让「检索挂了 → 人格/记忆块没了」这种故障零线索（用户只看到听雪变笨）。
-      ensureContextText().catch((e) => { warn(`上下文预热失败: ${e?.message ?? e}`) })
+      // turnInput 一律不在这里改写（否则 turn 内通知会把它带偏，见 claimed 监听器）。
+      // 唯一例外：宿主不提供 agent/inbox/claimed（老 DSH）时，turnInputTurn 永远为 null，
+      // 此时退化成修复前的行为——宁可像以前那样可能漂移，也绝不变成「永远空输入」
+      // （那会连记忆块一起丢掉，等于用「少注入」换「不漂移」，是明确禁止的）。
+      // 这里**不预热**：inserted 早于 claimed（真机里通知的 inserted 先到、主人原话的
+      // claimed 后到），若在此预热就等于拿「本批次第一条消息」先跑一次 embed + 向量检索——
+      // 而那条往往是通知。预热只留给「已确认为主人的话」的 claimed 分支。
+      // 不预热不影响正确性：assemble 会 await 同一个 ensureContextText()，按当时的输入建缓存。
+      if (turnInputTurn === null) {
+        turnInput = text
+      }
     } catch { /* 忽略 */ }
   })
   disposers.push(userEventDisposer)
+
+  /**
+   * 按 turn 锁定检索输入 —— 这是「同一 turn 内 system 漂移」的根治点。
+   *
+   * 为什么不能用 agent/inbox/inserted：它对**每一条**进 inbox 的消息都触发，其中包括
+   * turn 中途作为 next-step 插进来的 AgentTeams 派单、后台子代理完成通知。旧实现
+   * 在这些通知上无条件 `turnInput = text`，于是同一个 turn 里检索键被改写：
+   * 记忆块被换成**另一次检索**的结果（不是消失）。真机实测 turn 145：
+   *   step1 header 22177（记忆块提到 c54f…）→ 插入 a75f2cb8 通知
+   *   → step2 header 22272（记忆块变成 2d83…）
+   * 副作用同样真实：每次改写都让缓存 miss → 白跑一次 embed + 向量检索（就是「还多花钱」）。
+   *
+   * 为什么用 agent/inbox/claimed：它携带 **turn 号**（DSH runtime-types.ts:197），
+   * 且 DSH 的 preStep 里 `inbox.claim()` 是**同步**发生在 `systemPrompt.assemble()`
+   * 之前（agent-loop/src/agent.ts:229-230），所以本监听器一定先于本次装配执行——
+   * 锁定后的键在同一 turn 的每次 assemble 上都一样，缓存必然命中。
+   *
+   * 语义：一个 turn 的检索 query = 该 turn **第一条 source.kind === 'user'**（主人真实
+   * 输入）的消息。mid-turn 通知（同一个 turn 号）不再改写它 ⇒ 同 turn 内 system 恒定，
+   * 且注入量不变（只是不再变）。
+   *
+   * 为什么不能只取「第一条被 claim 的消息」：claim() 先 splice 全部 next-step、再推
+   * next-turn，然后按该顺序逐个 emit claimed（inbox.ts:71-77）。首批次里混着通知时，
+   * batch[0] 是通知而主人的话排在其后——整轮就会用**通知文本**检索记忆。真机实测
+   * 4 个有害回合：turn 81/102/123/148（source.kind 是 plugin:user-approval /
+   * subagent-settled，主人的原话在同一批次里被丢掉）。
+   *
+   * 判据来源：agent/inbox/claimed 的 message 是 UserMessage，携带 source: MessageSource
+   * （packages/llm/llm/src/message.ts:137-143，MessageSourceMap.user = { kind: 'user' }），
+   * 故 payload.message.source?.kind === 'user' 即可判定，无需新增事件。
+   *
+   * 语义取舍：本 turn 已有权威值（主人的话）则**绝不**被后续 claim 改写；整批无人类
+   * 输入时退回 batch[0] 兜底（否则会变成「永远空输入」，等于用「少注入」换「不漂移」，
+   * 是明确禁止的）。兜底值一旦等到主人的话就会被升级为权威值。
+   */
+  const claimedDisposer = ctx.on('agent/inbox/claimed', (payload) => {
+    if (!ready || !isChatAgent(payload?.agent)) return
+    try {
+      const turn = payload?.turn
+      if (typeof turn !== 'number') return
+      const text = payload?.message?.content?.find?.((b) => b.type === 'text')?.text ?? ''
+      if (!text || commands?.isCommand?.(text)) return
+      const isHuman = payload?.message?.source?.kind === 'user'
+      // 本 turn 的锁定已「够用」时早退——这是「同 turn 内 system 恒定」的**唯一**承重保护，
+      // 刻意只写这一条（不拆成两个并列 if）：拆开会让后续某个 if 兜住本该失败的场景，
+      // 于是「删掉这条早退」不再能让套件变红，保护就退化成了不可验证的摆设。
+      //   turnInputAuthoritative —— 已锁到主人的话，任何后续 claim 都不得改写（含通知）。
+      //   !isHuman               —— 已锁到兜底值，本 turn 再来非人类消息也不该覆盖它。
+      // 两种「够用」都必须早退：只退其一都会留下一个能被通知改写的窗口 = 轮内漂移。
+      if (turnInputTurn === turn && (turnInputAuthoritative || !isHuman)) return
+      turnInputTurn = turn
+      turnInput = text
+      turnInputAuthoritative = isHuman
+      // 只有锁到**主人的话**才预热。理由：claim() 把整批消息在同一个同步循环里
+      // emit 完（inbox.ts:71-77），所以首批次「通知在前、主人原话在后」时，先给
+      // 通知预热等于白跑一次 embed + 向量检索（正是要消灭的成本）。不预热也不影响
+      // 正确性——随后 system-prompt/assemble 瀑布会 await 同一个 ensureContextText()，
+      // 按最终输入建缓存；通知独占的 turn 只是没有叠加收益，不会少注入。
+      // 不 await——让它与 agent 循环并发跑；assemble 拿到的是同一个 in-flight promise
+      // （createContextCache 按输入去重），既不重复检索也不丢正确性。
+      // 不吞错：buildContextText 内部已 catch 并 warn，能走到这里的都是意外异常。
+      if (turnInputAuthoritative) {
+        ensureContextText().catch((e) => { warn(`上下文预热失败: ${e?.message ?? e}`) })
+      }
+    } catch { /* 忽略 */ }
+  })
+  disposers.push(claimedDisposer)
 
   /** 写入记忆（含实体抽取）。 */
   async function writeMemory(text, scene) {

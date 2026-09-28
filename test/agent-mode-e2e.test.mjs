@@ -8,15 +8,33 @@
 
 import { createStateManager } from '../src/state/index.mjs'
 import { createCommandHandler } from '../src/commands/index.mjs'
-import { readNotifierState, writeNotifierState, setBindingDetailed, getBinding } from '../src/bind/index.mjs'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import {
+  readNotifierState, writeNotifierState, setBindingDetailed, getBinding, WRITE_RETRY_DEFAULTS,
+} from '../src/bind/index.mjs'
+import { mkdtemp, readFile, rm, open } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-test('真机路径：/agentstart → /agentstop 全流程（34 项）', async () => {
+/**
+ * 写盘退避的**总睡眠时长**（由 src/bind 导出的常量算出，不写死毫秒）。
+ *
+ * 用途：第 12 组要构造「回绑写盘失败、紧接着清键写盘成功」。两次写的是同一个文件，
+ * 靠一个读句柄让 rename 报 EPERM —— 若句柄一直握着，两次都失败（那是 unresolved，
+ * 归第 13 组）；要得到 `cleared`，就得在**第一次的退避预算耗尽之后、第二次的预算
+ * 耗尽之前**释放句柄。这里把「第一次要多久才耗尽」算出来，避免写死 2550ms 这类
+ * 数字——一旦有人调整 WRITE_RETRY_DEFAULTS，释放时机跟着变而不是悄悄失效。
+ */
+function writeRetryBudgetMs() {
+  const { attempts, baseDelayMs, maxDelayMs } = WRITE_RETRY_DEFAULTS
+  let total = 0
+  for (let i = 0; i < attempts - 1; i++) total += Math.min(baseDelayMs * 2 ** i, maxDelayMs)
+  return total
+}
+
+test('真机路径：/agentstart → /agentstop 全流程', async () => {
   const KEY = 'bind:qq:USER'
   const results = []
   const check = (name, ok, detail = '') => {
@@ -323,8 +341,24 @@ test('写盘争用重试预算与「先绑定后建会话」（旧代码会失�
   console.log('')
   console.log('=== 12) /agentstop 回绑失败 → 必须清空绑定键（F1：cleared 分支）===')
   // 这是「mode=chat 但绑定仍指着已销毁隔离会话」的唯一防线，此前零覆盖。
-  // 手法：让 setBindingDetailed **第二次**调用（= 回绑那次）写盘失败——
-  // 把 state.json 换成同名目录，rename 上去稳定失败（EPERM）。
+  //
+  // 【注入手法为什么不沿用「文件 → 同名目录」】
+  // 旧手法把 state.json 换成同名目录。实测（本机 Windows）那会让**读取**也失败
+  // ——`readNotifierState`（src/bind/index.mjs:50-59）的 catch 回退空对象，
+  // 于是 `getBinding` 在 /agentstop **之前**就返回 null：断言 `绑定 !== agentSid`
+  // 在被测逻辑跑之前就已恒真，与旧版硬编码 `true` 的空断言等价（批次 1 的 R2-F1）。
+  // 实测三态对照：
+  //   文件→目录 : setBinding 失败(EPERM)，但 getBinding=null ← 断言恒真（坏）
+  //   持读句柄  : setBinding 失败(EPERM)，文件**始终可读** ← 断言真实（用这个）
+  //
+  // 【为什么能拿到 `cleared` 而不是 `unresolved`】
+  // writeExitBinding 里是两次独立写盘：①回绑聊天会话 ②失败后清键。
+  // 只握一个读句柄会让①和②都失败 → 那是 unresolved（第 13 组）。
+  // 要得到 cleared：必须在①的退避预算耗尽后、②的预算耗尽前释放句柄。
+  //
+  // 释放时机**不靠猜毫秒**：writeExitBinding 在①失败、发起②之前会 `warn` 一句
+  // 「…改为清空绑定键…」。钩住这句日志再释放句柄，就是①②之间那个确定性时点。
+  // （按 WRITE_RETRY_DEFAULTS 算出的预算只用作兜底超时，防止 warn 未触发时句柄漏关。）
   const f1File = join(dir, 'f1-state.json')
   await writeFile2(f1File, JSON.stringify({ 'bind:qq:U': 'session-chat-aaa' }))
   const data5 = join(dir, 'data5')
@@ -343,27 +377,93 @@ test('写盘争用重试预算与「先绑定后建会话」（旧代码会失�
   await cmds5.handle('/agentstart')
   check('F1 前置：已进入 agent 模式', state5.mode === 'agent', `mode=${state5.mode}`)
   const agentSid5 = state5.agentSessionId
-  // 破坏写入目标：文件 → 目录
-  await rm(f1File, { force: true })
-  await mkdir2(f1File, { recursive: true })
+  // 关键前置：此刻绑定**确实是**那个隔离会话（不是 null）。
+  // 没有这一条，后面「绑定 !== agentSid」就可能是「本来就是 null」的恒真。
+  const boundBeforeStop = await getBinding('qq', 'U', f1File)
+  check('F1 前置：/agentstop 前绑定是真实的隔离会话 id（非 null）',
+    boundBeforeStop === agentSid5 && String(boundBeforeStop).startsWith('tingxue-agent-'),
+    `绑定=${JSON.stringify(boundBeforeStop)} agentSid=${agentSid5}`)
+
+  // 注入：持读句柄 → rename 覆盖报 EPERM，但文件始终可读
+  let guard5Open = true
+  const closeGuard5 = async () => {
+    if (guard5Open) { guard5Open = false; try { await guard5.close() } catch {} }
+  }
+  const guard5 = await open(f1File, 'r')
+  // ①→②之间的确定性释放点：writeExitBinding 在回绑失败后、清键之前必 warn 一次
+  const f1Warns = []
+  // 注意：commands 里的 warn 是 `logger?.warn?.('[dsh-tingxue/commands]', m)`——两个参数，
+  // 真因在**第二个**上。只取首个参数会拿到前缀、断言静默失真。
+  const warn5 = (...args) => {
+    const m = args.map((a) => String(a)).join(' ')
+    f1Warns.push(m)
+    if (/改为清空绑定键/.test(m)) void closeGuard5()
+  }
+  // 兜底：万一 warn 文案改了，也保证句柄被释放（按导出的预算算，不写死毫秒）
+  const release5 = setTimeout(() => { void closeGuard5() }, writeRetryBudgetMs() + 500)
   const f1Pushed = []
+  const f1Infos = []
+  // info 打点：`if (exitBinding.cleared) info('退出 agent 模式：回绑失败，已清空绑定键…')`
+  // 在 src/commands/index.mjs:244-246，**只在 cleared 分支**执行。它比回执文案更贴近
+  // 分支本身（回执是下游读同一字段再渲染），用作 F2 的插桩证据。
+  const info5 = (...args) => { f1Infos.push(args.map((a) => String(a)).join(' ')) }
   const cmds5b = createCommandHandler({
     state: state5, notifier: { async push(m) { f1Pushed.push(String(m?.content ?? '')) } },
-    agents: agents5, config: cfg5, logger: { warn: () => {}, info: () => {} },
+    agents: agents5, config: cfg5, logger: { warn: warn5, info: info5 },
   })
-  await cmds5b.handle('/agentstop')
+  try {
+    await cmds5b.handle('/agentstop')
+  } finally {
+    clearTimeout(release5)
+    await closeGuard5()
+  }
   const f1Text = f1Pushed.join('\n')
+  const bindingAfterStop = await getBinding('qq', 'U', f1File)
+  check('F1 回绑那次写盘确实失败了（有 warn 真因，不是没触发）',
+    f1Warns.some((m) => /写盘失败/.test(m) && /EPERM/.test(m)),
+    f1Warns.join(' | ').replace(/\n/g, ' ').slice(0, 160))
   check('F1 绑定被清空（cleared：回绑失败后删键，QQ 不再指向已销毁会话）',
-    (await getBinding('qq', 'U', f1File)) === null,
-    `键值=${JSON.stringify(await getBinding('qq', 'U', f1File))}`)
+    bindingAfterStop === null, `键值=${JSON.stringify(bindingAfterStop)}`)
   check('F1 回执明说已清空绑定，不能只回一句「已退出 agent 模式」',
     /已清空绑定|既未回绑也没能清空/.test(f1Text) && !/^已退出 agent 模式，回到日常聊天。$/.test(f1Text.trim()),
     f1Text.replace(/\n/g, ' | ').slice(0, 140))
-  // 真断言（原先是硬编码 true 的空断言，白占一行且不检验任何东西）：
-  // 防御目标 = 绑定既不能指向已销毁的隔离会话，也不能停留在「无绑定」以外的错误值上。
+  // 【R2-F1 的真正修复】本组标题声称覆盖 cleared，就必须**真的**走到 cleared；
+  // 否则它结构性只能走 UNRESOLVED-compound（旧注入的毛病）。这里断言回执是
+  // cleared 文案、且**不得**是 unresolved 文案，把分支钉死。
+  check('F1 走的是 cleared 分支而不是 unresolved（回执文案必须自证）',
+    /已清空绑定/.test(f1Text) && !/既未回绑也没能清空/.test(f1Text),
+    f1Text.replace(/\n/g, ' | ').slice(0, 140))
+  // F2 的插桩证据：`if (exitBinding.cleared) info(...)`（src/commands/index.mjs:244-246）
+  // 只在 cleared 真分支里跑。它独立于回执渲染，证明本组到达的就是 cleared。
+  check('F2 插桩：cleared 专属 info 打点被触达（本组真的进了 cleared 分支）',
+    f1Infos.some((m) => /已清空绑定键/.test(m)),
+    f1Infos.join(' | ').slice(0, 140) || '（info 未被打点）')
+  // 真断言：绑定既不能指向已销毁的隔离会话，也不能停留在「无绑定」以外的错误值上。
+  // 这条现在**真的能失败**：把 writeExitBinding 倒退成旧实现（只 warn、不回绑、
+  // 不清键）后，绑定会停在 agentSid5 → 本行变红（倒退实验见提交说明）。
   check('F1 绑定不得停留在已销毁的隔离会话',
-    (await getBinding('qq', 'U', f1File)) !== agentSid5,
-    `键值=${JSON.stringify(await getBinding('qq', 'U', f1File))} 原 agentSid=${agentSid5}`)
+    bindingAfterStop !== agentSid5,
+    `键值=${JSON.stringify(bindingAfterStop)} 原 agentSid=${agentSid5}`)
+
+  console.log('')
+  console.log('=== 12b) 回绑失败的成因自证：持读句柄期间写盘确实失败，但文件仍可读 ===')
+  // 证明上面的「回绑失败」不是靠把文件读坏伪造出来的——文件全程可读。
+  {
+    const probeFile = join(dir, 'f1-probe.json')
+    await writeFile2(probeFile, JSON.stringify({ 'bind:qq:U': 'session-chat-aaa' }))
+    const guardProbe = await open(probeFile, 'r')
+    const heldWrite = await setBindingDetailed('qq', 'U', 'tingxue-agent-probe', probeFile, { attempts: 2, baseDelayMs: 5 })
+    const stillReadable = await getBinding('qq', 'U', probeFile)
+    await guardProbe.close()
+    check('12b：持读句柄时写盘确实失败（EPERM），不是靠读坏伪造',
+      heldWrite.ok === false && heldWrite.code === 'EPERM',
+      `ok=${heldWrite.ok} code=${heldWrite.code}`)
+    check('12b：同一时刻文件仍可读（绑定读到真实值，不是 null）',
+      stillReadable === 'session-chat-aaa', `读到=${JSON.stringify(stillReadable)}`)
+    const afterRelease = await setBindingDetailed('qq', 'U', 'tingxue-agent-probe2', probeFile, { attempts: 2, baseDelayMs: 5 })
+    check('12b：释放句柄后写盘恢复正常（证明失败只由句柄引起）',
+      afterRelease.ok === true, `ok=${afterRelease.ok}`)
+  }
 
   console.log('')
   console.log('=== 13) /agentstop：回绑与清空双双失败 → 必须报 unresolved（F1 的 unresolved 分支）===')
@@ -468,6 +568,70 @@ test('写盘争用重试预算与「先绑定后建会话」（旧代码会失�
     f2bText.replace(/\n/g, ' | ').slice(0, 140))
   check('F2b 据实说明原本没有绑定', /原本没有绑定/.test(f2bText),
     f2bText.replace(/\n/g, ' | ').slice(0, 140))
+
+  console.log('')
+  console.log('=== 16) 退出回执只反映本次退出：上一次的失败结果不得泄漏进下一次（F4）===')
+  // 覆盖目标：`handleStop()` 的返回值契约 —— 本次回执结果只经由返回值流动，
+  //           **不再**放模块级共享变量（`src/commands/index.mjs`，见那里的注释）。
+  // 为什么必须这样：回执是**每次退出**的独立结论。若把结果放共享变量，上一次退出留下的
+  // 非 ok 结果会跨调用残留，被下一次「其实成功了」的退出误读成 unresolved/cleared
+  // —— 主人会收到一句假警报（或反过来漏报）。
+  //
+  // 【本组的可证伪性（MUT 证据）】历史上这里曾断言「handleStop 开头那行 `exitBinding = null`
+  // 复位」。但实测删掉那行后本组仍绿——因为紧随其后的赋值是无条件的、且先于任何读取，
+  // 那行复位是**不可达的死代码**，断言恒真。现已改为断言真正的性质，并实测如下：
+  //   MUT-G（把结果改回模块级共享变量 + 缓存式赋值，即修复前的旧形态）→ 本组**变红**，
+  //        报「回执必须是干净成功文案」实际得到上一次的 unresolved 文案（2/45 失败）。
+  // 构造：① 先制造一次真·失败的退出（无 chatSessionId + 清键也失败 → unresolved）；
+  //       ② 恢复可写、重新进入 agent 模式、正常退出 → 回执必须是**干净的成功文案**。
+  const f4File = join(dir, 'f4-state.json')
+  const data9 = join(dir, 'data9')
+  const mkF4Writable = async () => {
+    await rm(f4File, { recursive: true, force: true })
+    await writeFile2(f4File, JSON.stringify({ 'bind:qq:U': 'session-chat-aaa' }))
+  }
+  await mkF4Writable()
+  const state9 = await createStateManager({ dataDir: data9 })
+  await state9.setChatSessionId('session-chat-aaa')
+  const cfg9 = {
+    agentStartKeyword: '/agentstart', agentStopKeyword: '/agentstop',
+    profilePath: join(process.cwd(), '听雪档案.txt'),
+    dataDir: data9, notifierStateFile: f4File, channel: 'qq', userId: 'U',
+  }
+  const agents9 = { async create(o) { return { id: o.sessionId, dispose: async () => {} } } }
+  const f4Pushed = []
+  const cmds9 = createCommandHandler({
+    state: state9, notifier: { async push(m) { f4Pushed.push(String(m?.content ?? '')) } },
+    agents: agents9, config: cfg9, logger: { warn: () => {}, info: () => {} },
+  })
+  await cmds9.handle('/agentstart')
+  // ① 制造非 ok 退出：回绑目标不存在 + 写盘目标变目录 → unresolved
+  await state9.setChatSessionId(null)
+  await rm(f4File, { force: true })
+  await mkdir2(f4File, { recursive: true })
+  await cmds9.handle('/agentstop')
+  const firstFailText = f4Pushed.join('\n')
+  check('F4 前置：第一次退出确实是失败态（unresolved 文案）',
+    /既未回绑也没能清空/.test(firstFailText),
+    firstFailText.replace(/\n/g, ' | ').slice(0, 120))
+  // ② 恢复正常，重新进入 agent 模式并正常退出
+  f4Pushed.length = 0
+  await mkF4Writable()
+  await state9.setChatSessionId('session-chat-aaa')
+  await cmds9.handle('/agentstart')
+  check('F4 第二段前置：重新进入 agent 模式', state9.mode === 'agent', `mode=${state9.mode}`)
+  f4Pushed.length = 0 // 只取第二次 /agentstop 的回执
+  await cmds9.handle('/agentstop')
+  const secondText = f4Pushed.join('\n').trim()
+  // 关键断言：第二次是成功退出，回执必须是干净文案。
+  // 可证伪性：把结果改回模块级共享变量 + 缓存式赋值（MUT-G，即修复前的旧形态）后，
+  // 第一次的 unresolved 文案会残留 → 本行变红。实测 MUT-G 下本行确实失败。
+  check('F4 第二次正常退出的回执必须是干净成功文案（不得复用上一次的失败结果）',
+    secondText === '已退出 agent 模式，回到日常聊天。',
+    `回执=${JSON.stringify(secondText).slice(0, 160)}`)
+  check('F4 第二次回执不得出现上一次的 unresolved/cleared 字样',
+    !/既未回绑也没能清空/.test(secondText) && !/已清空绑定/.test(secondText),
+    secondText.replace(/\n/g, ' | ').slice(0, 160))
 
   console.log('')
   console.log('=== 汇总 ===')
