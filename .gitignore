@@ -14,10 +14,16 @@ logs/
 # 调研/第三方快照（SAG 源码等，仅本地备查，不入库）
 research/
 
-# 依赖锁：本项目是「库」，不提交 lock（应用才提交）。
-# 实测：删掉后 pnpm install 从 package.json 正常解析（exit 0）。
-# 同时删掉的 pnpm-workspace.yaml 里 allowBuilds 抄的是 profile 的包（sharp/onnxruntime），与本项目无关。
-pnpm-lock.yaml
+# 依赖锁：**提交**（曾误判为「库不提交 lock」，导致 CI 全程红）。
+# 实情：CI 里 frozen-lockfile 是 pnpm 的默认值（`CI=true` 时自动开启），
+# 没有 lock 就必然 `ERR_PNPM_NO_LOCKFILE`，且**删掉 --frozen-lockfile 参数
+# 也救不了**——实测 `CI=true` 下裸 pnpm install 同样失败。故必须提交 lock。
+# 本项目有运行时依赖（@lancedb/lancedb、apache-arrow）且 CI 要跑 173 个测试，
+# 属于「应用」用法，lock 能保证 CI 结果可复现。
+#
+# pnpm-workspace.yaml 仍不提交：CI 里 `pnpm install` 会按需生成缺省配置，
+# 其 allowBuilds 只是 sharp/onnxruntime/protobufjs（lancedb 的传递依赖）的
+# 构建开关，这三个包用预编译二进制，本地实测为 ignoredBuilds，不需构建。
 pnpm-workspace.yaml
 
 # 内部文档与凭据（含隐私，切勿提交）
