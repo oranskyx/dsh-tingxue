@@ -41,6 +41,7 @@
 | **可交互图谱 UI** | 零依赖 canvas 力导向蜘蛛网：节点聚类、邻居高亮、标签碰撞避免、小地图导航，离线可用 |
 | **可插拔模型层** | embedding 与语义推理抽象成统一接口，换模型只改配置，插件逻辑零改动 |
 | **图形化配置** | 29 个配置项做成图形界面，设置侧边栏独立成页 + 插件配置标签页两个入口，含覆盖标记与单点重置 |
+| **安装安全流程** | `scripts/install-check.mjs`：一条命令把「装完静默失效」变成可机检断言，`--fix` 自动修复且**失败自动回滚**；活 profile 只读、凭据只比对不回显 |
 | **推送隔离** | 通过 dsh-notifier 的 `route:agents` 精确分流，其他 DSH 会话的通知与审批不会打扰 QQ |
 | **模式自愈** | 启动自检 + 运行期 reconcile：mode 与 QQ 真实绑定不一致时自动退回聊天模式，不会静默丢掉人格与记忆 |
 
@@ -96,6 +97,62 @@ pnpm install                          # 让补丁生效
 > DSH 插件的源码是**进程启动时加载、不热重载**的。改完源码必须两步走：**① 同步到 profile 的 `node_modules` 副本 → ② 重启 DSH**。
 > `cordis.patch.yml` 的配置改动会热重载，但 `.mjs` / `client.js` 源码不会。
 > 浏览器端同理：`__DSH_BOOT__` 是加载 HTML 那一刻注入的，**重启 DSH 后还需要硬刷新页面**（`Ctrl + Shift + R`）。
+
+### 4) 装完自检（一条命令，别靠肉眼）
+
+装完最容易出的不是报错，而是**静默失效**：插件装上了、进程也起来了，功能却不在。上面那几步手工动作，漏任何一条都是这个结果。所以装完最后跑一次：
+
+```sh
+cd ~/.dsh/profiles/web
+node <插件仓库>/scripts/install-check.mjs          # 有问题 exit 1，全绿 exit 0
+node <插件仓库>/scripts/install-check.mjs --json    # 机器可读
+```
+
+它逐条机检下面这些「漏了就静默失效」的点，并给出可执行的修复指引：
+
+| 检查 | 漏了会怎样 |
+|---|---|
+| **C1** 插件声明了 `dsh.bundle`，且有 `files` 白名单 | profile 会把它当普通依赖装 |
+| **C2** 插件在 `dsh.profile.bundles` 名单里 | 正是那句「已安装，未生效：未声明 `dsh.bundle`」 |
+| **C3** `dsh-notifier` **钉死 `0.9.0`**（不是 `^0.9.0`）；已装版本也是 0.9.0 | 补丁带**行号 hunk**，升级后 `pnpm install` 直接失败。有 `pnpm-lock.yaml` 时本机今天不会立刻炸，但换机器 / 删 lock / `pnpm update` 会 |
+| **C4** 补丁接线在 `pnpm-workspace.yaml` 的 `patchedDependencies`（**不在** profile 的 `package.json` 里） | 补丁文件躺在磁盘上也不会被应用 |
+| **C4-applied** 补丁**真的生效了**（`_qq-segment.mjs` 在 + `message.mjs` 含 `parseQQFileAttachments`） | QQ 收文件功能整个不存在；接完必须再 `pnpm install` |
+| **C5** 运行副本 `node_modules/dsh-tingxue` 与仓库的 `src/` `client/` 补丁层**逐字节一致** | profile 用 `file:` + `nodeLinker: hoisted`，运行副本是**真实目录拷贝不是 junction** → 改仓库不生效（本项目最隐蔽的失效模式） |
+| **C6** 仓库里没有活配置的凭据明文（扫全部跟踪文件），工作区干净 | 凭据进仓库 |
+| **C7** 活 profile 里的明文凭据被识别出来 | 真实风险面其实在仓库外（见 `SECURITY.md`） |
+| **C8** `npm pack --dry-run` 清单无泄漏 | `.gitignore` **拦不住 npm 打包**，`files` 白名单才是权威 |
+| **C9** profile 的 `cordis.patch.yml` **结构上真的能解析** | 一条缩进坏掉的补丁层会让**整个 profile 起不来**（DSH 启动即失败），而 `git status` 与肉眼都看不出来 |
+
+> **C9 是被真实事故加的。** 手改 `cordis.patch.yml` 时删多/删少一行，留下的悬挂键会让 YAML 解析直接失败，两个解析器都会拒绝；而当时的工具链里没有任何东西能发现它——**一重启 DSH 就起不来**。C9 只做结构校验（可解析、是补丁项数组、无重复映射键），不检查语义。
+
+> ⚠️ **`scripts/` 不随 npm 包发布**（`files` 白名单只含 `scripts/selfcheck.mjs`）。所以 `install-check.mjs` 只对**从仓库克隆**的使用者可用；用 npm 安装的人**没有这个文件**。要跑自检请克隆仓库。
+
+C5 对 manifest 只比对**运行时字段**（`version`/`main`/`exports`/`dsh`/`dependencies`/`peerDependencies`/`engines`/`type`）——仓库 URL 这类元数据差异不点红，免得把「永远有条红的忽略掉」训出来。
+
+**C3 与 C5 按「现在是不是真的坏了」分级**，不是一刀切报红——一条永远挂着的红等于没红：
+
+| 情形 | 判定 |
+|---|---|
+| C3：`^0.9.0`，但 `pnpm-lock.yaml` 锁住了 0.9.0 | **warn**（地雷，不是当下的火：今天不会炸，换机器 / 删 lock / `pnpm update` 才踩） |
+| C3：`^0.9.0`，且**没有** lock | **fail**（下次安装就会拉到新版） |
+| C3：已安装的版本**不是** 0.9.0 | **fail**（补丁的行号上下文必然错位，当下的火） |
+| C5：运行副本 == 仓库工作树 | **ok** |
+| C5：差异**全是未提交的在制品**（运行副本 == HEAD） | **warn**（已提交的那份没坏；但在制品要生效必须先同步 + 重启） |
+| C5：存在**已提交却没同步**的文件 | **fail**（跑的就是旧代码） |
+
+**自动回滚**：加 `--fix` 才会写盘，且**动手前逐文件备份原始字节与 SHA256**；只要有一条修完复检仍不过，就**整批回滚**并给出还原前后的哈希对比。
+
+```sh
+# 先复制一份 profile 再让它修（推荐；活 profile 默认拒写）
+node <插件仓库>/scripts/install-check.mjs --fix --profile-dir /path/to/profile-copy
+```
+
+**两条护栏**：
+
+- **活 profile 默认只读**。`--fix` 对 `~/.dsh/profiles/**` 下的文件一律拒写（报告里记为 skipped），要真写必须显式加 `--allow-live-profile`。校验模式（不加 `--fix`）**永远不写任何文件**。
+- **凭据只比对、不回显**。脚本会读出活配置里的凭据字面量用于比对，但**绝不把值写进输出**——只报处数与文件名。校验完 `git status --porcelain` 仍应为空。
+
+**它不会替你做的两件事**（会改变活环境，交回你的手）：跑 `pnpm install`、同步运行副本并重启 DSH。这两条它只会报红并说清该做什么。
 
 ---
 
@@ -268,6 +325,8 @@ dsh-tingxue/
 node scripts/selfcheck.mjs            # 逐轮 system 长度 / 同一个回合内是否变动（唯一判据）
 node scripts/selfcheck.mjs --json --full
 ```
+
+（另有 `--started=<ISO 时刻>` 可覆盖「进程启动时刻」，只在诊断/测试判据②时用，见下文「运行状态自检」。）
 
 > 另有一个**独立**（非增长类）缺陷已由 selfcheck 报出：**同一个回合内 system 长度会变动**（34 轮里 15 轮，最大摆动 2,992 字符，turn 136 出现 `【相关记忆】` 整块消失的一次）。这是「记忆块在轮内不稳定」，属于注入抖动，不是本节的增长归因；排查入口是 `turnInput` 缓存键与 `agent/inbox/inserted` 的时序。
 
@@ -502,8 +561,27 @@ node "test/selfcheck.test.mjs"     # 自检脚本自身（证明它会红，不�
 node "test/notifier-suppress.test.mjs"     # 命令消费不该被报成「任务被阻塞」
 node "test/bigint.test.mjs"        # LanceDB Int64 是 BigInt（含真机契约：expand 不得挂死）
 node "test/agent-mode-e2e.test.mjs"        # /agentstart → /agentstop 真机全流程（34 项）
+node "test/install-check.test.mjs"         # 安装安全流程：坏环境真判红 + 回滚真还原 + 凭据不回显
 node "test/patches/_qq-segment.test.mjs"   # 历史 QQ 分段补丁（不随主测试集）
 ```
+
+### 运行安装自检
+
+装完/改完 profile 后跑，判断「装上了但没生效」：
+
+> **这个脚本不随 npm 包发布**（`files` 白名单只含 `scripts/selfcheck.mjs`），只有克隆仓库才有。用 npm 安装的话请克隆仓库后再跑。
+
+```sh
+node scripts/install-check.mjs               # 校验活 profile（只读，不写任何文件）
+node scripts/install-check.mjs --json        # 机器可读
+node scripts/install-check.mjs --self-test   # 自带回归（零依赖，临时目录内自建夹具）
+node scripts/install-check.mjs --self-test --live   # 真机项也计入退出码（默认仅提示）
+node scripts/install-check.mjs --profile-dir <副本> --fix   # 修复 + 失败自动回滚
+```
+
+**`--self-test` 与标准套件是同一份实现**：核心 31 条通过脚本导出的 `registerCoreCases` 注册，`test/install-check.test.mjs` 调用的也是它 —— 所以 `node --test test/*.test.mjs` 覆盖的就是这 31 条，不存在「回归只活在自检里、门禁看不见」的盲区。2 条真机项读活 profile，**默认只提示不计退出码**（保证在无 profile 的环境也能跑绿），要当硬门禁就加 `--live`。
+
+检查项与被覆盖的失效形态见 [安装 §4](#4-装完自检一条命令别靠肉眼)；脚本自身的回归测试见 `test/install-check.test.mjs`。
 
 ### 运行状态自检
 
@@ -513,20 +591,30 @@ node "test/patches/_qq-segment.test.mjs"   # 历史 QQ 分段补丁（不随主�
 node scripts/selfcheck.mjs          # 人类可读；有问题 exit 1，全绿 exit 0
 node scripts/selfcheck.mjs --json   # 机器可读
 node scripts/selfcheck.mjs --full   # 解全部日志帧（默认只解尾部 2000 帧，快）
+node scripts/selfcheck.mjs --started=2026-09-26T18:13:29+08:00   # 覆盖「DSH 进程启动时刻」
 ```
+
+`--started` 只在诊断/测试时用：默认从监听 3080 的进程反查启动时刻，一般不用传。它的用途是**把「运行代码是否最新」这条判据摆到可控时间点上**——例如副本刚同步完、进程还没重启时，用它复现「需要重启」的结论，或反向证明某次同步确实已被进程加载。
 
 输出示例：
 
 ```text
+  ✓ 运行副本与仓库源码一致（内容哈希）
+      18 个文件哈希全等；改仓库仍需「同步副本 + 重启 DSH」才生效
   ✓ 运行代码是最新的
-      DSH 启动 2026/9/25 15:58:38 ≥ 源码改动 2026/9/25 15:56:37
-  ✓ 滑动窗口
-      13 轮 / 1426 字符；latestInfo 0 条；mode=chat
-  ✓ 注入轮内恒定
-      本次启动(15:58:38)之后 2 轮均无轮内变动；system 长度 14193 / 14016
-  ✓ 无重复/累赘上下文
-      14016 字符 · 54 工具 · 人格块在 · 身份行 1 次
+      DSH 启动 2026/9/26 18:13:29；副本最新写入 2026/9/26 17:02:11 早于进程启动；且副本内容 == 仓库工作树（不看仓库侧 mtime，故同内容重写不误报）
 ```
+
+副本写入**晚于**进程启动时，上面第二条会变成 fail（此时内容可能仍是一致的——进程加载的是写入前那份）：
+
+```text
+  ✓ 运行副本与仓库源码一致（内容哈希）
+  ✗ 需要重启 DSH —— 副本在进程启动后被写入
+      副本最新写入的是 src/plugin-entry.mjs：2026/9/26 19:24:44；而 DSH 进程启动于 2026/9/26 18:13:29 —— 副本晚 71 分钟。
+      Node 在 import 期就加载完了模块，所以该进程装的仍是写入前的那份内容；副本内容虽与仓库一致，也必须重启 DSH 才真正生效。
+```
+
+「运行代码是否最新」由**两条并存**的判据共同回答，两者互不覆盖：①**内容哈希**——副本内容是否 == 仓库工作树（**仓库侧** mtime 不参与，故同内容重写不误报）；②**时点**——副本里运行时文件（`src/`、`client/`、`cordis.patch.yml`）的最新写入时刻是否晚于进程启动。只查①会漏掉「副本已同步、进程却在同步之前就起来了」，这正是最容易被误判成「已生效」的形态。
 
 **零成本**：只读本地文件 + 打 `/health`、`/profile` 这类纯本地端点，**绝不**调用 `/memory/search` 之类会触发 embedding 的接口（那是要花钱的）。**只读**：不写记忆库、不改任何配置。
 
@@ -547,6 +635,7 @@ python test_private_handler.py
 4. **异步上下文不要靠 `section.text` 同步缓存**——`assemble()` 同步求值 `text` 之后才跑瀑布，所以同步缓存首轮必空、之后恒错位一轮。要用 `system-prompt/assemble` 瀑布（见 [上下文组装](#聊天模式上下文组装) 与 `src/context/inject.mjs`）。
 5. **注册作用域决定可见范围**——要只对聊天会话生效，就必须注册在 agent 作用域，不能注册在插件 root ctx。
 6. **跨插件不要做值导入**——client bundle 的纯净度门禁拒绝跨插件的值导入，协作走 cordis 服务。
+7. **装完/改完 profile 先跑 `scripts/install-check.mjs`**——「装上了但没生效」不会有报错，只会静默。改动 `src/` 后尤其要跑：C5 会逐字节比对运行副本与仓库源码，专门抓「改完忘了同步 / 忘了重启」。
 
 ---
 
@@ -561,6 +650,7 @@ python test_private_handler.py
 - [x] 记忆写入去重（`/memory` 快速返回 + 异步实体抽取）
 - [x] 注入时序收敛（改走 `system-prompt/assemble` 异步瀑布取真值；`section.text` 同步求值**结构上**不可能赶上检索）
 - [x] 运行状态自检（`scripts/selfcheck.mjs`，九项，零成本只读）
+- [x] 安装安全流程（`scripts/install-check.mjs`，八项机检 + `--fix` 自动修复与失败自动回滚）
 - [ ] 图谱面板「鹰眼模式」小地图（内容随主视图缩放，作为标准缩略图模式的可选增强）
 - [ ] 记忆库主干架构的多端一致性加固
 
@@ -576,8 +666,11 @@ python test_private_handler.py
 | [`SECURITY.md`](./SECURITY.md) | 安全策略与敏感面说明 |
 | [`astrbot-plugin/README.md`](./astrbot-plugin/README.md) | AstrBot 插件说明 |
 | [`astrbot-plugin/SYNC.md`](./astrbot-plugin/SYNC.md) | AstrBot 插件同步铁律 |
+| [`发布形态与安装流程.md`](./发布形态与安装流程.md) | 发布形态设计：发布出去长什么样、用户下载什么、按什么顺序装（含 dsh-notifier 补丁现状与上游演进） |
 
 > **内部文档不随仓库发布。** 设计文档（`需求规格.md`、`交接文档.md`、`记忆库主干架构*.md`、`astrbot接入方案.md`、`调研报告-*.md`、`发布注意事项.md`）已由 `.gitignore` 挡在仓库外——它们含本机路径、会话 ID 等隐私信息。克隆本仓库看不到这些文件是正常的。
+>
+> `发布形态与安装流程.md` **不在这个清单里**：它经过穷举扫描（密钥字面量 / QQ id / session id / 凭据路径 / 本机绝对路径 / 内部术语 全部 0 命中），不含隐私，是给使用者看的公开文档，因此纳入版本控制。
 
 ---
 
