@@ -465,6 +465,18 @@ function npmCliPath() {
  */
 function pnpmCliPath() {
   const PATH_DIRS = String(process.env.PATH ?? '').split(delimiter).filter(Boolean)
+  // 入口文件名随版本变：老版 pnpm.mjs，新版 pnpm.cjs。两个都认。
+  const NAMES = ['pnpm.cjs', 'pnpm.mjs', 'pnpm.js']
+  /** 从一个「可执行壳所在目录」反推包内的 js 入口。
+   *  pnpm/action-setup 把壳放在 `…/node_modules/.bin`（PNPM_HOME 就是这个），
+   *  真正的 js 在 `…/node_modules/pnpm/bin/pnpm.cjs` —— 上一层是 node_modules，
+   *  所以是 `../pnpm/bin`，不是 `../node_modules/pnpm/bin`（这两个都留，别猜）。
+   *  版本管理器（volta/asdf/corepack）也是同样的形状。 */
+  const fromShimDir = (d) => [
+    ...NAMES.map((n) => join(d, n)),
+    ...NAMES.map((n) => join(d, '..', 'pnpm', 'bin', n)),
+    ...NAMES.map((n) => join(d, '..', 'node_modules', 'pnpm', 'bin', n)),
+  ]
   const bases = [
     process.env.APPDATA ? join(process.env.APPDATA, 'npm', 'node_modules', 'pnpm', 'bin') : null,
     process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'pnpm') : null,
@@ -472,19 +484,15 @@ function pnpmCliPath() {
     // setup-node / 系统包管理器装的 node：pnpm 落在 node 前缀的 lib 下
     join(dirname(process.execPath), 'lib', 'node_modules', 'pnpm', 'bin'),
     join(dirname(process.execPath), '..', 'lib', 'node_modules', 'pnpm', 'bin'),
-    // pnpm/action-setup 把可执行壳放在 PNPM_HOME，js 入口在 node_modules 里
-    process.env.PNPM_HOME ?? null,
-    process.env.PNPM_HOME ? join(process.env.PNPM_HOME, '..', 'node_modules', 'pnpm', 'bin') : null,
     '/usr/local/lib/node_modules/pnpm/bin',
     '/usr/lib/node_modules/pnpm/bin',
   ].filter(Boolean)
-  // 入口文件名随版本变：老版 pnpm.mjs，新版 pnpm.cjs。两个都认。
-  const NAMES = ['pnpm.cjs', 'pnpm.mjs', 'pnpm.js']
   const cands = []
   if (process.env.pnpm_execpath && /\.(mjs|cjs|js)$/.test(process.env.pnpm_execpath)) cands.push(process.env.pnpm_execpath)
   for (const b of bases) for (const n of NAMES) cands.push(join(b, n))
-  // 最后扫 PATH：只收 js 入口（POSIX 上 pnpm 本体是 shell 脚本，不能直接 spawn）
-  for (const d of PATH_DIRS) for (const n of NAMES) cands.push(join(d, n))
+  // PNPM_HOME 与 PATH 上的都是「壳目录」，走同一条反推
+  if (process.env.PNPM_HOME) cands.push(...fromShimDir(process.env.PNPM_HOME))
+  for (const d of PATH_DIRS) cands.push(...fromShimDir(d))
   for (const c of cands) if (c && existsSync(c)) return c
   return null
 }
