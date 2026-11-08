@@ -1658,8 +1658,8 @@ window.__ModuleLoader__.load({
       ctx.slots.inject('main', () => ctx.slots.register({
         name: 'main',
         key: PANEL_GRAPH,
-        component: GraphPage,
-      }))
+        inject: () => ({ tr }),
+      }, GraphPage))
 
       ctx.slots.inject('main', () => ctx.slots.register({
         name: 'main',

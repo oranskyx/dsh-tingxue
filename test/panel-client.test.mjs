@@ -71,6 +71,15 @@ test('apply 在假 ctx 下注册四个面板且不抛错', () => {
     globalThis.fetch = realFetch
   }
 
+  // 每个注册项都必须带一个真组件/图标（register(entry, Component) 的第二参数）。
+  // 这一条就是为 2026-11-08 那次事故加的：图谱面板把组件塞进了第一个参数对象里
+  // （register({ key, component })），注册是成功的、侧栏图标也在，但主面板没有组件，
+  // DSH 把该 key 标成 active:false，用户点进去就是空白，而且没有任何报错。
+  for (const slot of slots) {
+    const label = slot.entry.key || slot.entry.id || slot.entry.name
+    assert.equal(typeof slot.component, 'function', `槽位 ${label} 没有挂组件（register 的第二个参数）`)
+  }
+
   const entryIds = slots.map((s) => s.entry.id).filter(Boolean)
   assert.deepEqual([...entryIds].sort(), ['tingxue-agent', 'tingxue-companion', 'tingxue-graph', 'tingxue-memory'])
   const mainKeys = slots.filter((s) => s.entry.name === 'main').map((s) => s.entry.key)
