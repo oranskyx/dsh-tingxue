@@ -44,7 +44,7 @@ jobs:
       - name: Plugin loads
         run: |
           node -e "
-          import('./src/plugin-entry.mjs')
+          import('./src/im-bot/index.mjs')
             .then(m => {
               if (!m.apply || !m.name) throw new Error('missing apply/name exports')
               console.log('plugin loads OK:', m.name)
