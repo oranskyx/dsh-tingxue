@@ -47,6 +47,7 @@ window.__ModuleLoader__.load({
       graph_counts: '实体 {n} · 关系 {m}',
       graph_loading: '正在加载图谱…',
       graph_unnamed: '未命名实体',
+      graph_open_manager: '打开完整管理界面（实体 / 关系 / 记忆 / 回收站）',
       service_offline_title: '记忆服务没在运行',
       service_offline_desc: '8766 没有响应，所以这里既没有图谱数据也没有管理界面。',
       service_start: '启动记忆服务',
@@ -1480,7 +1481,14 @@ window.__ModuleLoader__.load({
                 h('div', { className: 'txu-muted' },
                   (view.selected.type || '') + (view.selected.summary ? ' · ' + view.selected.summary : '')))
               : null),
-          view.status === 'loading' ? h('p', { className: 'txu-muted' }, tr('graph_loading', '正在加载图谱…')) : null))
+          view.status === 'loading' ? h('p', { className: 'txu-muted' }, tr('graph_loading', '正在加载图谱…')) : null,
+          h('p', { className: 'txu-muted', style: { marginTop: '8px' } },
+            h('a', {
+              href: 'http://127.0.0.1:8765/',
+              target: '_blank',
+              rel: 'noreferrer',
+              style: { color: 'var(--dsw-alias-state-business-primary, #4c8dff)' },
+            }, tr('graph_open_manager', '打开完整管理界面（实体 / 关系 / 记忆 / 回收站）')))))
     }
 
     function MemoryPage(props) {
