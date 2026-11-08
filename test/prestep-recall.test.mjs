@@ -26,7 +26,14 @@ writeFileSync(join(LOCAL, 'dsh-tingxue-ui', 'settings.json'), JSON.stringify({
 }), 'utf8');
 process.env.LOCALAPPDATA = LOCAL;
 
-const PLUGIN = 'file:///D:/oransky/Desktop/oransky/dsh/dsh-tingxue/src/im-bot/index.mjs';
+// 用 import.meta.url 定位，不能写死盘符路径：写死 D:/… 时 CI（ubuntu）上
+// 直接 ERR_MODULE_NOT_FOUND，整个测试文件连一条断言都跑不到。
+const PERSONA_TMP = join(DIAG, '听雪档案.txt');
+writeFileSync(PERSONA_TMP, '你是听雪，一只白毛猫娘。说话短，带点猫懒。\n', 'utf8');
+const BOTS_TMP = join(DIAG, 'bots');
+mkdirSync(BOTS_TMP, { recursive: true });
+
+const PLUGIN = new URL('../src/im-bot/index.mjs', import.meta.url).href;
 const mod = await import(PLUGIN);
 
 const CHAT_SESSION = 'session-c732ae5c-11bb-4559-ba8b-7a2ba79dd235';
@@ -56,8 +63,10 @@ function mount(baseUrl) {
     },
   };
   mod.apply(ctx, {
-    personaPath: 'D:\\oransky\\Desktop\\oransky\\dsh\\dsh-tingxue\\听雪档案.txt',
-    botStateDir: 'D:\\dsh-home\\integrations\\dsh-qq\\bots',
+    // 全用临时夹具：写死真机路径时 CI（ubuntu）上这些路径不存在，
+    // 人格段会静默变空，断言「人格段开头是听雪」就假红。
+    personaPath: PERSONA_TMP,
+    botStateDir: BOTS_TMP,
     memoryServiceUrl: baseUrl,
     memoryRecall: 'full',
   });
