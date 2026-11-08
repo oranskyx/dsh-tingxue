@@ -51,10 +51,13 @@ const exports_ = registrations[0].factory((spec) => {
 })
 
 t('导出 apply 函数', () => { if (typeof exports_.apply !== 'function') throw new Error('typeof=' + typeof exports_.apply) })
-t('导出 inject 数组', () => {
+t('导出 inject 数组，且只声明本构建确实提供的服务', () => {
   if (!Array.isArray(exports_.inject)) throw new Error('not array')
-  const need = ['slots', 'locale', 'settingsScope']
+  const need = ['slots', 'locale']
   for (const n of need) if (!exports_.inject.includes(n)) throw new Error('missing ' + n)
+  // 回归护栏：settingsScope 在 DSH 0.2.1-rc.5 客户端并不存在（全 asar 无此符号）。
+  // 声明必选服务但宿主不提供 → Cordis 永久 pending → web boot 失败 → 整个应用起不来。
+  if (exports_.inject.includes('settingsScope')) throw new Error('settingsScope 不能进 inject：本构建不提供该服务')
 })
 t('只 require 了 react', () => {
   const bad = requiredSpecs.filter((s) => s !== 'react')
@@ -90,6 +93,7 @@ const ctx = {
   settingsScope: {
     bind: (spec) => { scopeBinds.push(spec); return boundScope },
   },
+  get(name) { return name === 'settingsScope' ? this.settingsScope : undefined },
   slots: {
     inject: (key, cb) => { const r = cb(); return r },
     register: (options, Component) => {
@@ -164,11 +168,14 @@ t('侧边栏 label 解析出「听雪」', () => {
 // t2 拍板方案 A：只保留侧边栏入口。插件配置标签页里那张「同一个组件、同一份设置」
 // 的重复卡片必须不复存在 —— 这条用例在旧代码上会失败（旧代码注册了 plugin.item）。
 t('不再注册 settings.plugin.item（重复入口已移除）', () => {
-  const extra = slotRegistrations.filter((r) => r.options.name !== 'settings.section')
-  if (extra.length > 0) throw new Error('多出来的入口: ' + extra.map((r) => r.options.name).join(','))
+  const pluginItems = slotRegistrations.filter((r) => r.options.name === 'settings.plugin.item')
+  if (pluginItems.length > 0) throw new Error('plugin.item 仍存在: ' + pluginItems.length)
 })
-t('只注册了一个槽位', () => {
-  if (slotRegistrations.length !== 1) throw new Error('count=' + slotRegistrations.length)
+t('注册 5 个槽位：设置页 + 两个侧栏入口 + 两个主面板', () => {
+  if (slotRegistrations.length !== 5) throw new Error('count=' + slotRegistrations.length)
+  const names = slotRegistrations.map((r) => r.options.name).sort()
+  const expected = ['main', 'main', 'settings.section', 'sidebar.panellist', 'sidebar.panellist']
+  if (JSON.stringify(names) !== JSON.stringify(expected)) throw new Error('names=' + names.join(','))
 })
 
 // —— 检查 inject() 面的形状 ——
@@ -211,6 +218,30 @@ t('discard 清掉草稿', () => {
   const snap = face.hooks.card.getSnapshot()
   if (snap.dirty !== false) throw new Error('dirty=' + snap.dirty)
 })
+
+// —— 关键回归：宿主没有 settingsScope 时（本构建的真实情况）——
+// 插件必须照常激活：不抛错、注册两个侧栏入口 + 两个主面板 + 设置卡片
+// （设置卡片改走同源 /dsh-tingxue/config，由 Host 半侧的 settings 服务供数）。
+{
+  const slots2 = []
+  const ctx2 = {
+    effect: (fn) => fn(),
+    locale: { register: () => () => {}, bind: () => (k) => k },
+    get: () => undefined,
+    slots: {
+      inject: (key, cb) => cb(),
+      register: (options, Component) => { slots2.push({ options, Component }); return () => {} },
+    },
+  }
+  let err = null
+  try { exports_.apply(ctx2) } catch (e) { err = e }
+  t('没有 settingsScope 时 apply 不抛错', () => { if (err) throw new Error(err.message) })
+  t('没有 settingsScope 时仍注册 5 个槽位（设置页 + 两个侧栏 + 两个主面板）', () => {
+    const names = slots2.map((r) => r.options.name).sort()
+    const expected = ['main', 'main', 'settings.section', 'sidebar.panellist', 'sidebar.panellist']
+    if (JSON.stringify(names) !== JSON.stringify(expected)) throw new Error('names=' + names.join(','))
+  })
+}
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===`)
 process.exit(fail === 0 ? 0 : 1)

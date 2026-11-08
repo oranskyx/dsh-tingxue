@@ -17,6 +17,7 @@ import { getBinding, notifierStateDir, setAgentRoute, deleteAgentRoute, setBindi
 import { createGraphDashboard } from './graph-dashboard/index.mjs'
 import { createMemoryService } from './memory-service/index.mjs'
 import { mountModelCatalogRoutes } from './model-catalog/index.mjs'
+import { registerTingxueWeb } from './web-proxy.mjs'
 import { installTingxueSettings } from './settings/index.mjs'
 
 export const name = 'dsh-tingxue'
@@ -200,7 +201,7 @@ export function apply(ctx, config = {}) {
         const ok = await installTingxueSettings(ctx, config, {
           warn,
           // 每次设置保存后立刻把通知开关物化到 dsh-notifier state
-          onApply: () => { void applyNotifierPrefs() },
+          onApply: () => { if (config.uiOnly !== true) void applyNotifierPrefs() },
         })
         if (ok) info('settings 命名空间已注册（设置页可配置）')
         // 用户层/默认层已回写到 config，重读一次
@@ -212,6 +213,26 @@ export function apply(ctx, config = {}) {
         embeddingDimensions = config.embeddingDimensions ?? embeddingDimensions
       } catch (e) {
         warn(`settings 注册异常（不影响运行）: ${e.message}`)
+      }
+
+      // 0.5 UI-only 预览模式（config.uiOnly === true）：
+      //     只注册设置页、模型目录与同源反代（两个侧栏页 + 图谱 iframe），
+      //     不打开 LanceDB、不连 dsh-notifier、不接命令。
+      //     用于「先把面板装进 DSH」这一阶段；记忆读写接线在后续阶段替换。
+      if (config.uiOnly === true) {
+        try {
+          const disposeCatalog = mountModelCatalogRoutes(ctx, { logger, warn, resolveApiKey })
+          if (disposeCatalog) disposers.push(disposeCatalog)
+        } catch (e) {
+          warn(`模型目录路由初始化失败（uiOnly）: ${e.message}`)
+        }
+        try {
+          disposers.push(registerTingxueWeb(ctx))
+        } catch (e) {
+          warn(`同源反代初始化失败（uiOnly）: ${e.message}`)
+        }
+        info('uiOnly 预览模式：已注册设置/模型目录/同源反代；未打开记忆库')
+        return
       }
 
       // 1. 模型适配层（用 DSH credentials 服务解析 key）
@@ -421,6 +442,15 @@ export function apply(ctx, config = {}) {
         if (disposeCatalog) disposers.push(disposeCatalog)
       } catch (e) {
         warn(`模型目录路由初始化失败: ${e.message}`)
+      }
+
+      // 8.3 同源反代：Web GUI 里的「听雪」「记忆图谱」两个侧栏页都经这里
+      //     访问本机独立记忆服务（8766）与图谱 UI（8765），不另开端口、无跨源。
+      //     宿主没有 webServer 时是空操作（返回空 disposer）。
+      try {
+        disposers.push(registerTingxueWeb(ctx))
+      } catch (e) {
+        warn(`同源反代初始化失败: ${e.message}`)
       }
 
       ready = true

@@ -5,6 +5,11 @@ node_modules/
 # 记忆库数据（本地文件即库，不应入库）
 .dsh-tingxue-data/
 *.lance/
+# 服务实例配置（含本机绝对路径与凭据路径，用 config.example.json 做模板）
+service/config.json
+
+# 面板写入的 API 凭据（正常在 dataDir 下、仓库外；这里兜底防误放）
+secrets.json
 
 # 运行期产物
 workcopy/

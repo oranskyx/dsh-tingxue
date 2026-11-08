@@ -22,8 +22,34 @@ window.__ModuleLoader__.load({
     const NS = 'settings.tingxue'
     const zh = {
       nav: '听雪',
+      graphNav: '记忆图谱',
       title: '听雪',
       subtitle: '双模式虚拟生命系统',
+      // —— 侧栏「听雪」页：记忆服务状态总览 ——
+      overview: '状态总览',
+      overviewHint: '只读探活与计数；记忆服务由插件自己拉起，这里不会写入或修改记忆库。',
+      serviceStatus: '服务状态',
+      statusOnline: '在线',
+      statusOffline: '离线',
+      statusLoading: '连接中…',
+      memories: '记忆',
+      entities: '实体',
+      relations: '关系',
+      activeRelations: '有效关系',
+      trash: '回收站',
+      serviceAddress: '服务地址',
+      sameOriginPath: '同源路径',
+      refresh: '刷新',
+      refreshing: '刷新中…',
+      lastUpdated: '上次刷新 {time}',
+      updatedAt: '上次刷新',
+      actions: '入口',
+      openGraph: '打开记忆图谱',
+      openSettings: '打开设置',
+      dualModePending: '双模式：待接线',
+      loadFailed: '读取失败',
+      offlineHint: '记忆服务未响应：确认「面板与服务 → 启用记忆服务」已打开，并检查服务端口。',
+      graphFrameTitle: '听雪 · 记忆图谱',
       description: '聊天模式与 agent 模式的人格、记忆库、模型、绑定与面板配置。改动在下次重启 DSH 后生效。',
       save: '保存',
       discard: '放弃',
@@ -55,8 +81,34 @@ window.__ModuleLoader__.load({
     }
     const en = {
       nav: 'Tingxue',
+      graphNav: 'Memory graph',
       title: 'Tingxue',
       subtitle: 'dual-mode virtual life system',
+      // —— sidebar "Tingxue" page: memory service overview ——
+      overview: 'Status overview',
+      overviewHint: 'Read-only health probe and counts; the memory service is started by the plugin — nothing here writes to the store.',
+      serviceStatus: 'Service',
+      statusOnline: 'Online',
+      statusOffline: 'Offline',
+      statusLoading: 'Connecting…',
+      memories: 'Memories',
+      entities: 'Entities',
+      relations: 'Relations',
+      activeRelations: 'Active relations',
+      trash: 'Trash',
+      serviceAddress: 'Service address',
+      sameOriginPath: 'Same-origin path',
+      refresh: 'Refresh',
+      refreshing: 'Refreshing…',
+      lastUpdated: 'Last refreshed {time}',
+      updatedAt: 'Last refreshed',
+      actions: 'Actions',
+      openGraph: 'Open memory graph',
+      openSettings: 'Open settings',
+      dualModePending: 'Dual mode: not wired yet',
+      loadFailed: 'Failed to load',
+      offlineHint: 'The memory service did not answer. Check “Panels & services → Enable memory service” and its port.',
+      graphFrameTitle: 'Tingxue · Memory graph',
       description: 'Persona, memory store, models, binding and panel settings. Changes apply after the next DSH restart.',
       save: 'Save',
       discard: 'Discard',
@@ -438,6 +490,58 @@ window.__ModuleLoader__.load({
       },
       modalHead: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 },
       modalBody: { flex: 1, overflowY: 'auto', marginTop: 8, paddingRight: 2 },
+
+      // —— 侧栏「听雪」页（状态总览）——
+      // 全部颜色取自宿主主题令牌；令牌缺失时用 currentColor / transparent 兜底，
+      // 不写死深色或浅色，主题切换时自动跟随。
+      txPage: {
+        flex: '1 1 auto', minHeight: 0, height: '100%', boxSizing: 'border-box',
+        overflowY: 'auto', padding: '24px 28px 36px',
+        color: 'var(--dsw-alias-label-primary, inherit)',
+      },
+      txHead: { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 18 },
+      txTitle: { fontSize: 20, fontWeight: 600, lineHeight: 1.3, color: 'var(--dsw-alias-label-primary, inherit)' },
+      txSub: { fontSize: 12, color: 'var(--dsw-alias-label-secondary, currentColor)', marginTop: 3 },
+      txCard: {
+        border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.35))',
+        background: 'var(--dsw-alias-bg-layer-2, transparent)',
+        borderRadius: 'var(--dsw-radius-panel, 12px)',
+        padding: '16px 18px', marginBottom: 14,
+      },
+      txCardTitle: { fontSize: 13, fontWeight: 600, marginBottom: 10, color: 'var(--dsw-alias-label-primary, inherit)' },
+      txKV: { display: 'grid', gridTemplateColumns: 'max-content minmax(0, 1fr)', gap: '6px 16px', fontSize: 12, alignItems: 'baseline' },
+      txK: { color: 'var(--dsw-alias-label-secondary, currentColor)', fontSize: 12 },
+      txV: { fontSize: 12, wordBreak: 'break-all', color: 'var(--dsw-alias-label-primary, inherit)' },
+      txMuted: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary, currentColor)', lineHeight: 1.6 },
+      txStats: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))', gap: 12, marginBottom: 14 },
+      txStat: {
+        border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.35))',
+        background: 'var(--dsw-alias-bg-layer-2, transparent)',
+        borderRadius: 'var(--dsw-radius-panel, 12px)', padding: '14px 16px',
+      },
+      txStatLabel: { fontSize: 11, letterSpacing: '.04em', color: 'var(--dsw-alias-label-secondary, currentColor)' },
+      txStatValue: { fontSize: 24, fontWeight: 600, marginTop: 5, fontVariantNumeric: 'tabular-nums', color: 'var(--dsw-alias-label-primary, inherit)' },
+      txStatus: { display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 600 },
+      txDot: { width: 8, height: 8, borderRadius: 999, display: 'inline-block', background: 'currentColor' },
+      txRow: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+      txError: { fontSize: 12, color: 'var(--dsw-alias-state-error-primary, currentColor)', marginTop: 10 },
+      txDual: {
+        marginTop: 2, fontSize: 12, padding: '10px 12px',
+        color: 'var(--dsw-alias-label-secondary, currentColor)',
+        border: '1px dashed var(--dsw-alias-border-l2, rgba(128,128,128,.4))',
+        borderRadius: 'var(--dsw-radius-md, 8px)',
+      },
+
+      // —— 侧栏「记忆图谱」页：整页 iframe ——
+      txGraphWrap: {
+        flex: '1 1 auto', minHeight: 0, height: '100%', width: '100%',
+        display: 'flex', overflow: 'hidden', background: 'transparent',
+        borderRadius: 'var(--dsw-radius-panel, 12px)',
+      },
+      txGraphFrame: {
+        flex: '1 1 auto', width: '100%', height: '100%',
+        border: 0, display: 'block', background: 'transparent',
+      },
     }
 
     // ── 设置侧边栏页面 ──────────────────────────────────────────────────────
@@ -569,32 +673,514 @@ window.__ModuleLoader__.load({
       )
     }
 
+    // ── 侧栏入口 / 同源反代 / 图谱页 ────────────────────────────────────────
+    /** 两个侧栏入口 id；同一个 id 也是 main 槽位的 key 与反代前缀的末段。 */
+    const PANEL_ID_TINGXUE = 'tingxue'
+    const PANEL_ID_GRAPH = 'tingxue-graph'
+    /** 同源反代前缀（Host 半侧 src/web-proxy.mjs 注册的两条 prefix 路由）。 */
+    const MEMORY_PROXY_PATH = '/dsh-tingxue/memory'
+    const GRAPH_PROXY_PATH = '/dsh-tingxue/graph'
+    /** 记忆服务真实监听地址；只用于展示，浏览器不发跨源请求。 */
+    const MEMORY_UPSTREAM = 'http://127.0.0.1:8766'
+    /** 契约端点：健康探活与统计计数（都经同源反代转发）。 */
+    const HEALTH_ENDPOINT = MEMORY_PROXY_PATH + '/health'
+    const STATS_ENDPOINT = MEMORY_PROXY_PATH + '/stats'
+
+    /** 没有注入翻译时的兜底（组件单独渲染/测试替身下不空着）。 */
+    const fallbackTr = (key, fallback) => (fallback === undefined ? key : fallback)
+
+    /**
+     * 读宿主当前主题。
+     *
+     * 宿主（ui-layout 的 theme presenter）把生效的明暗投影成
+     * `body[data-ds-dark-theme]` 与 `html{color-scheme}`；主题包也可能写
+     * `data-theme` / class。按「显式标记 → 宿主投影 → 计算样式 → 系统偏好」
+     * 逐层读，任一层能确定就返回，全读不到时才按浅色。
+     * @returns {'light'|'dark'}
+     */
+    function readHostTheme() {
+      const root = typeof document !== 'undefined' ? document.documentElement : null
+      const body = typeof document !== 'undefined' ? document.body : null
+      const rootMark = root && typeof root.getAttribute === 'function'
+        ? (root.getAttribute('data-theme') || root.getAttribute('data-color-scheme'))
+        : null
+      const bodyMark = body && typeof body.getAttribute === 'function'
+        ? (body.getAttribute('data-theme') || body.getAttribute('data-color-scheme'))
+        : null
+      const explicit = rootMark || bodyMark
+      if (explicit === 'dark' || explicit === 'light') return explicit
+      if (body && typeof body.hasAttribute === 'function' && body.hasAttribute('data-ds-dark-theme')) return 'dark'
+      if (body && typeof body.hasAttribute === 'function' && body.hasAttribute('data-ds-light-theme')) return 'light'
+      for (const name of ['dark', 'theme-dark', 'dsh-dark', 'ds-dark']) {
+        if (root && root.classList && root.classList.contains(name)) return 'dark'
+      }
+      for (const name of ['light', 'theme-light', 'dsh-light', 'ds-light']) {
+        if (root && root.classList && root.classList.contains(name)) return 'light'
+      }
+      try {
+        if (root && typeof getComputedStyle === 'function') {
+          const scheme = String(getComputedStyle(root).colorScheme || '').toLowerCase()
+          if (scheme.includes('dark')) return 'dark'
+          if (scheme.includes('light')) return 'light'
+        }
+      } catch { /* 计算样式不可读：继续回落 */ }
+      try {
+        if (typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches) return 'dark'
+      } catch { /* 没有 matchMedia：按浅色 */ }
+      return 'light'
+    }
+
+    /**
+     * 图谱 iframe 地址。
+     *
+     * 契约里的默认值是 `/dsh-tingxue/graph/?api=/dsh-tingxue/memory&theme=auto`；
+     * 这里把 auto 换成宿主解析出的 light|dark，让 iframe 首帧就与宿主一致，
+     * 不再让图谱页自己猜一次主题。
+     * @param {'light'|'dark'} theme
+     * @returns {string}
+     */
+    function graphSrc(theme) {
+      const resolved = theme === 'dark' ? 'dark' : 'light'
+      return GRAPH_PROXY_PATH + '/?api=' + MEMORY_PROXY_PATH + '&theme=' + resolved
+    }
+
+    /** GET 一个听雪 JSON 端点；非 2xx 或 ok!==true 都转成可显示的 Error。 */
+    async function fetchJson(path) {
+      const response = await fetch(path, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+      })
+      let body = null
+      try { body = await response.json() } catch { body = null }
+      if (!response.ok) throw new Error((body && body.error) || ('HTTP ' + response.status))
+      if (!body || body.ok !== true) throw new Error((body && body.error) || '响应不是有效的听雪 API 数据')
+      return body
+    }
+
+    /**
+     * 打开宿主设置对话框。
+     *
+     * 设置面板归 ui-settings-general 所有，浏览器侧没有公开 service 可调用
+     * （`settings.open` 快捷键只在它自己的 resolve 里执行），因此这里点它渲染在
+     * `sidebar.settings` 槽里的 trigger 按钮；槽位找不到时再派发一次宿主快捷键。
+     * 两种情况都失败就静默返回 false，不影响页面其它功能。
+     * @returns {boolean}
+     */
+    function openHostSettings() {
+      try {
+        if (typeof document !== 'undefined') {
+          const seat = document.querySelector('[data-slot="sidebar.settings"]')
+          const trigger = seat && (seat.querySelector('button[aria-haspopup="dialog"]') || seat.querySelector('button'))
+          if (trigger && typeof trigger.click === 'function') {
+            trigger.click()
+            return true
+          }
+        }
+      } catch { /* 落到快捷键 */ }
+      try {
+        if (typeof document === 'undefined' || typeof KeyboardEvent !== 'function') return false
+        const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(String(navigator.platform || ''))
+        const event = new KeyboardEvent('keydown', {
+          key: ',', code: 'Comma', bubbles: true, cancelable: true,
+          ctrlKey: !mac, metaKey: mac, altKey: true,
+        })
+        document.dispatchEvent(event)
+        return true
+      } catch { return false }
+    }
+
+    /** 状态总览的数据源：健康探活 + 统计计数，挂载即拉一次，刷新按钮可重拉。 */
+    function useMemoryOverview() {
+      const [state, setState] = React.useState({ status: 'loading', health: null, stats: null, error: null, at: 0 })
+      const reload = React.useCallback(async () => {
+        setState((previous) => ({ ...previous, status: 'loading', error: null }))
+        const [healthResult, statsResult] = await Promise.allSettled([
+          fetchJson(HEALTH_ENDPOINT),
+          fetchJson(STATS_ENDPOINT),
+        ])
+        const health = healthResult.status === 'fulfilled' ? healthResult.value : null
+        const stats = statsResult.status === 'fulfilled' ? statsResult.value : null
+        const failures = [healthResult, statsResult]
+          .filter((result) => result.status === 'rejected')
+          .map((result) => String(result.reason && result.reason.message ? result.reason.message : result.reason))
+        setState({
+          status: health ? 'online' : 'offline',
+          health,
+          stats,
+          error: failures.length > 0 ? failures.join('；') : null,
+          at: Date.now(),
+        })
+      }, [])
+      React.useEffect(() => { void reload() }, [reload])
+      return { state, reload }
+    }
+
+    function formatClock(at) {
+      try {
+        return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      } catch { return String(at) }
+    }
+
+    /**
+     * 侧栏「听雪」图标：16×16 线稿雪花（三条轴线 + 中心圆），参数与宿主
+     * 其它 panel 行一致：strokeWidth 1.3、currentColor、round。
+     * 行本身由宿主 shell 拥有；glyph 用 data-dsh-panel-entry 标出归属。
+     */
+    function TingxuePanelIcon({ size = 16, active }) {
+      return h('svg', {
+        'data-dsh-panel-entry': PANEL_ID_TINGXUE,
+        'data-active': active ? 'true' : undefined,
+        viewBox: '0 0 16 16',
+        width: size,
+        height: size,
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: '1.3',
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        'aria-hidden': 'true',
+      },
+        h('path', { key: 'axis', d: 'M8 2v12' }),
+        h('path', { key: 'diagonal-a', d: 'M2.9 5l10.2 6' }),
+        h('path', { key: 'diagonal-b', d: 'M13.1 5L2.9 11' }),
+        h('circle', { key: 'hub', cx: 8, cy: 8, r: 1.05 }),
+      )
+    }
+
+    /** 侧栏「记忆图谱」图标：16×16 线稿三节点连线（两个圆 + 一条连到第三点）。 */
+    function TingxueGraphIcon({ size = 16, active }) {
+      return h('svg', {
+        'data-dsh-panel-entry': PANEL_ID_GRAPH,
+        'data-active': active ? 'true' : undefined,
+        viewBox: '0 0 16 16',
+        width: size,
+        height: size,
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: '1.3',
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        'aria-hidden': 'true',
+      },
+        h('path', { key: 'edge-ab', d: 'M4.6 10.7l2.5-5.3' }),
+        h('path', { key: 'edge-bc', d: 'M9.2 4.8l2.5 2.9' }),
+        h('path', { key: 'edge-ac', d: 'M5 11.3l5.8-2' }),
+        h('circle', { key: 'node-a', cx: 3.7, cy: 11.7, r: 1.35 }),
+        h('circle', { key: 'node-b', cx: 8, cy: 3.6, r: 1.35 }),
+        h('circle', { key: 'node-c', cx: 12.4, cy: 9.2, r: 1.35 }),
+      )
+    }
+
+    /** 侧栏「听雪」页：记忆服务的只读状态总览 + 两个入口 + 双模式占位。 */
+    function TingxuePanelPage(props) {
+      const tr = props.tr || fallbackTr
+      const { state, reload } = useMemoryOverview()
+      const busy = state.status === 'loading'
+      const online = state.status === 'online'
+      const health = state.health || {}
+      const stats = state.stats || {}
+      const statusText = busy
+        ? tr('statusLoading', '连接中…')
+        : (online ? tr('statusOnline', '在线') : tr('statusOffline', '离线'))
+      const statusColor = busy
+        ? 'var(--dsw-alias-label-tertiary, currentColor)'
+        : (online ? 'var(--dsw-alias-state-success-primary, currentColor)' : 'var(--dsw-alias-state-error-primary, currentColor)')
+      const number = (value) => {
+        if (typeof value === 'number' && Number.isFinite(value)) return value.toLocaleString()
+        if (value === undefined || value === null || value === '') return '—'
+        return String(value)
+      }
+      const tiles = [
+        { key: 'memories', label: tr('memories', '记忆'), value: stats.memories },
+        { key: 'entities', label: tr('entities', '实体'), value: stats.entities },
+        { key: 'relations', label: tr('relations', '关系'), value: stats.relations },
+        { key: 'activeRelations', label: tr('activeRelations', '有效关系'), value: stats.activeRelations },
+        { key: 'trash', label: tr('trash', '回收站'), value: stats.trash },
+      ]
+
+      return h('div', { style: S.txPage, 'data-dsh-tingxue-view': 'home' },
+        h('div', { style: S.txHead },
+          h('div', null,
+            h('div', { style: S.txTitle }, tr('title', '听雪')),
+            h('div', { style: S.txSub }, tr('subtitle', '双模式虚拟生命系统')),
+          ),
+          h('span', { style: { flex: 1 } }),
+          h('button', {
+            type: 'button', style: S.btn, disabled: busy,
+            onClick: () => { void reload() },
+          }, busy ? tr('refreshing', '刷新中…') : tr('refresh', '刷新')),
+        ),
+
+        h('div', { style: S.txCard },
+          h('div', { style: S.txCardTitle }, tr('overview', '状态总览')),
+          h('div', { style: S.txKV },
+            h('span', { style: S.txK }, tr('serviceStatus', '服务状态')),
+            h('span', { style: S.txV },
+              h('span', { style: { ...S.txStatus, color: statusColor } },
+                h('span', { style: S.txDot }),
+                h('span', null, statusText),
+              ),
+              online && health.service
+                ? h('span', { style: { ...S.txMuted, marginLeft: 8 } },
+                  String(health.service) + (health.port ? ' · :' + String(health.port) : ''))
+                : null,
+            ),
+            h('span', { style: S.txK }, tr('serviceAddress', '服务地址')),
+            h('span', { style: S.txV }, MEMORY_UPSTREAM),
+            h('span', { style: S.txK }, tr('sameOriginPath', '同源路径')),
+            h('span', { style: S.txV }, MEMORY_PROXY_PATH),
+            state.at ? h('span', { style: S.txK }, tr('updatedAt', '上次刷新')) : null,
+            state.at ? h('span', { style: S.txV }, formatClock(state.at)) : null,
+          ),
+          state.error ? h('div', { style: S.txError }, tr('loadFailed', '读取失败') + '：' + state.error) : null,
+          !busy && !online ? h('div', { style: { ...S.txMuted, marginTop: 8 } }, tr('offlineHint', '记忆服务未响应：确认「面板与服务 → 启用记忆服务」已打开，并检查服务端口。')) : null,
+          h('div', { style: { ...S.txMuted, marginTop: 8 } }, tr('overviewHint', '只读探活与计数；记忆服务由插件自己拉起，这里不会写入或修改记忆库。')),
+        ),
+
+        h('div', { style: S.txStats },
+          ...tiles.map((tile) => h('div', { key: tile.key, style: S.txStat },
+            h('div', { style: S.txStatLabel }, tile.label),
+            h('div', { style: S.txStatValue }, number(tile.value)),
+          )),
+        ),
+
+        h('div', { style: S.txCard },
+          h('div', { style: S.txCardTitle }, tr('actions', '入口')),
+          h('div', { style: S.txRow },
+            h('button', {
+              type: 'button', style: S.btn,
+              onClick: () => { if (typeof props.openGraph === 'function') props.openGraph() },
+            }, tr('openGraph', '打开记忆图谱')),
+            h('button', {
+              type: 'button', style: S.btn,
+              onClick: () => { if (typeof props.openSettings === 'function') props.openSettings() },
+            }, tr('openSettings', '打开设置')),
+          ),
+        ),
+
+        h('div', { style: S.txDual }, tr('dualModePending', '双模式：待接线')),
+      )
+    }
+
+    /**
+     * 侧栏「记忆图谱」页：整页 iframe。
+     *
+     * 图谱资源由 8765 提供、接口走同源反代 `/dsh-tingxue/memory`，浏览器不接触
+     * 8765/8766 的跨源地址。主题从宿主读一次，然后用 MutationObserver（html/body
+     * 的 data-theme/class/style）与 matchMedia 监听变化，变化时更新 src。
+     * 组件只在 layout 选中本 panel 时挂载，切走即卸载（iframe 随之销毁）。
+     */
+    function TingxueGraphPage(props) {
+      const tr = props.tr || fallbackTr
+      const [theme, setTheme] = React.useState(readHostTheme)
+      React.useEffect(() => {
+        let live = true
+        const sync = () => {
+          if (!live) return
+          setTheme((previous) => {
+            const next = readHostTheme()
+            return next === previous ? previous : next
+          })
+        }
+        const observer = typeof MutationObserver === 'function' ? new MutationObserver(sync) : null
+        const attributes = ['data-theme', 'data-ds-dark-theme', 'data-ds-light-theme', 'data-color-scheme', 'class', 'style']
+        try {
+          if (observer && typeof document !== 'undefined') {
+            observer.observe(document.documentElement, { attributes: true, attributeFilter: attributes })
+            if (document.body) observer.observe(document.body, { attributes: true, attributeFilter: attributes })
+          }
+        } catch { /* 观察失败：仍保留首帧主题 */ }
+        let media = null
+        try { media = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null } catch { media = null }
+        if (media) {
+          if (typeof media.addEventListener === 'function') media.addEventListener('change', sync)
+          else if (typeof media.addListener === 'function') media.addListener(sync)
+        }
+        sync()
+        return () => {
+          live = false
+          try { observer?.disconnect?.() } catch { /* 已断开 */ }
+          if (media) {
+            try {
+              if (typeof media.removeEventListener === 'function') media.removeEventListener('change', sync)
+              else if (typeof media.removeListener === 'function') media.removeListener(sync)
+            } catch { /* 已移除 */ }
+          }
+        }
+      }, [])
+
+      return h('div', { style: S.txGraphWrap, 'data-dsh-tingxue-view': 'graph' },
+        h('iframe', {
+          src: graphSrc(theme),
+          title: tr('graphFrameTitle', '听雪 · 记忆图谱'),
+          style: S.txGraphFrame,
+          referrerPolicy: 'no-referrer',
+        }),
+      )
+    }
+
     // ── 插件 apply ──────────────────────────────────────────────────────────
     /** 设置命名空间——与 Host 半侧 TINGXUE_SETTINGS_NS 同一个键。 */
     const TINGXUE_NS = 'dsh-tingxue'
 
+    /**
+     * HTTP 作用域：宿主 0.2.1-rc.5 的浏览器端没有 settingsScope 服务，
+     * 改用 Host 半侧挂在同源上的 `/dsh-tingxue/config`（读 describe / 写 update）。
+     * 形状与 settingsScope.bind() 的返回值对齐：getSnapshot / subscribe / set / unset。
+     */
+    function createHttpScope() {
+      const endpoint = '/dsh-tingxue/config'
+      let snapshot = { status: 'loading', writable: true, value: {}, base: {}, user: {}, revision: 0 }
+      const listeners = new Set()
+      const notify = () => { for (const fn of listeners) { try { fn() } catch { /* 订阅者异常不影响其他订阅者 */ } } }
+      const usable = () => typeof fetch === 'function'
+
+      async function refresh() {
+        if (!usable()) { snapshot = { ...snapshot, status: 'error', error: 'no fetch' }; notify(); return }
+        try {
+          const response = await fetch(endpoint, { credentials: 'same-origin', headers: { accept: 'application/json' } })
+          const data = await response.json()
+          if (data && data.ok !== false) {
+            snapshot = {
+              status: 'ready',
+              writable: data.writable !== false,
+              value: data.value || {},
+              base: data.base || {},
+              user: data.user || {},
+              revision: typeof data.revision === 'number' ? data.revision : 0,
+            }
+          } else {
+            snapshot = { ...snapshot, status: 'error', error: (data && data.error) || ('HTTP ' + response.status) }
+          }
+        } catch (error) {
+          const isShell = typeof location !== 'undefined' && !/^https?:$/.test(location.protocol)
+          snapshot = {
+            ...snapshot,
+            status: 'error',
+            error: isShell
+              ? '桌面外壳里读不到设置：请在浏览器打开 Web GUI（http://127.0.0.1:63078）后修改，或等 RPC 版接线'
+              : ((error && error.message) || String(error)),
+          }
+        }
+        notify()
+      }
+
+      async function write(body) {
+        if (!usable()) throw new Error('当前环境没有 fetch')
+        const response = await fetch(endpoint, {
+          method: 'PUT',
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ...body, expectedRevision: snapshot.revision }),
+        })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok || data.ok === false) {
+          throw new Error((data && data.error) || ('写入设置失败：HTTP ' + response.status))
+        }
+        await refresh()
+      }
+
+      if (usable()) void refresh()
+      return {
+        getSnapshot: () => snapshot,
+        subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn) },
+        set(key, value) { return write({ patch: { [key]: value } }) },
+        unset(key) { return write({ unset: [key] }) },
+        refresh,
+      }
+    }
+
     function apply(ctx) {
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-tingxue: dictionaries')
 
-      const scope = ctx.settingsScope.bind({ namespace: TINGXUE_NS })
-      const card = createCardController(scope)
+      // 设置作用域：优先用宿主真正提供的 settingsScope（老构建）；
+      // 本构建（0.2.1-rc.5）没有这个服务，退回到同源 `/dsh-tingxue/config`。
+      // 两条路径都失败时只少一张设置卡片，侧栏与图谱页照常，启动永不被拖住。
+      let card = null
+      let scopeService = null
+      try {
+        scopeService = typeof ctx.get === 'function' ? ctx.get('settingsScope') : ctx.settingsScope
+      } catch { /* 服务未注册 */ }
+      if (scopeService && typeof scopeService.bind === 'function') {
+        try {
+          card = createCardController(scopeService.bind({ namespace: TINGXUE_NS }))
+        } catch (error) {
+          try { console.warn('[dsh-tingxue] settingsScope.bind 失败，改用同源配置接口:', error?.message ?? error) } catch { /* 忽略 */ }
+        }
+      }
+      if (!card) {
+        try {
+          card = createCardController(createHttpScope())
+        } catch (error) {
+          try { console.warn('[dsh-tingxue] 设置卡片不可用（侧栏仍加载）:', error?.message ?? error) } catch { /* 忽略 */ }
+        }
+      }
+      /** 侧栏页/入口共用同一份翻译（含内嵌中文兜底）。 */
+      const tr = makeT(ctx.locale.bind(NS))
 
-      // 唯一入口：设置侧边栏里的独立一页（导航项「听雪」，排在 agent-presets 之后）。
+      /**
+       * 切到「记忆图谱」panel。
+       * layout 是可选服务：宿主没有它时静默忽略，入口不会因为切页报错而崩。
+       */
+      function openGraph() {
+        try {
+          const layout = ctx.get?.('layout')
+          if (layout && typeof layout.selectPanel === 'function') layout.selectPanel(PANEL_ID_GRAPH)
+        } catch { /* 无 layout / key 未注册：保持当前 panel */ }
+      }
+
+      /** 打开宿主设置对话框（链路见 openHostSettings 注释）。 */
+      function openSettings() {
+        openHostSettings()
+      }
+
+      // ── 侧栏两个入口 + 两个 main 页 ──────────────────────────────────────
+      // seat 由宿主 shell（ui-sidebar / ui-layout）声明，用 slots.inject 包住：
+      // 声明顺序无关；宿主没有该 seat 时入口自然缺席，也不会阻塞插件启动。
+      ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+        name: 'sidebar.panellist',
+        id: PANEL_ID_TINGXUE,
+        order: 40,
+        label: () => tr('nav', '听雪'),
+      }, TingxuePanelIcon))
+      ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+        name: 'sidebar.panellist',
+        id: PANEL_ID_GRAPH,
+        order: 41,
+        label: () => tr('graphNav', '记忆图谱'),
+      }, TingxueGraphIcon))
+      ctx.slots.inject('main', () => ctx.slots.register({
+        name: 'main',
+        key: PANEL_ID_TINGXUE,
+        inject: () => ({ tr, openGraph, openSettings }),
+      }, TingxuePanelPage))
+      ctx.slots.inject('main', () => ctx.slots.register({
+        name: 'main',
+        key: PANEL_ID_GRAPH,
+        inject: () => ({ tr }),
+      }, TingxueGraphPage))
+
+      // 唯一设置入口：设置侧边栏里的独立一页（导航项「听雪」，排在 agent-presets 之后）。
       // 不再注册 settings.plugin.item 的第二张卡片：两处渲染同一份设置，纯重复。
       // Host 半侧的命名空间注册（src/settings/index.mjs）与浏览器侧入口无关，
       // 所以去掉卡片不影响保存链路。
-      ctx.slots.inject('settings.section', () => ctx.slots.register({
-        name: 'settings.section',
-        id: 'tingxue',
-        order: 26,
-        label: () => ctx.locale.bind(NS)('nav'),
-        locale: NS,
-        inject: () => card.inject(),
-      }, TingxueSection))
+      if (card) {
+        ctx.slots.inject('settings.section', () => ctx.slots.register({
+          name: 'settings.section',
+          id: 'tingxue',
+          order: 26,
+          label: () => ctx.locale.bind(NS)('nav'),
+          locale: NS,
+          inject: () => card.inject(),
+        }, TingxueSection))
+      }
     }
 
     exports.apply = apply
-    exports.inject = ['slots', 'locale', 'settingsScope']
+    // 只声明本构建确实提供的服务。加任何本构建没有的服务（曾误加
+    // settingsScope）都会让插件永久 pending，web boot 失败、整个应用起不来。
+    exports.inject = ['slots', 'locale']
     return module.exports
   },
 })

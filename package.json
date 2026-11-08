@@ -1,46 +1,39 @@
 {
   "name": "dsh-tingxue",
-  "version": "0.1.0",
-  "description": "听雪 · 双模式虚拟生命系统：LanceDB 自建向量记忆库 + 自建实体关系图谱 + 小 LLM 语义推理，聊天模式与 agent 模式双模式，全部交互在 QQ（dsh-notifier）。",
+  "version": "0.2.0",
+  "description": "听雪 · 独立 IM bot 插件：人格注入 + 自建 LanceDB 向量记忆库 + 实体关系图谱。消息收发全部交给 @xmanrui/dsh-im，本插件只做「装配」和「记忆」，两个 QQ bot 分别承担陪伴与干活两种上下文。",
   "type": "module",
-  "main": "src/plugin-entry.mjs",
+  "main": "src/im-bot/index.mjs",
   "exports": {
-    ".": "./src/plugin-entry.mjs",
-    "./client": "./client/client.js",
+    ".": "./src/im-bot/index.mjs",
     "./package.json": "./package.json"
   },
   "files": [
     "src",
-    "client",
-    "scripts/selfcheck.mjs",
-    "examples",
+    "service",
     "cordis.patch.yml",
+    "听雪档案.txt",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test \"test/*.test.mjs\"",
-    "test:qqsegment": "node \"test/patches/_qq-segment.test.mjs\"",
     "selfcheck": "node scripts/selfcheck.mjs"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web"
     }
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/schemastery": "^3.18.1",
-    "dsh-notifier": "^0.9.0"
+    "@xmanrui/dsh-im": ">=5.0.3"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/schemastery": {
       "optional": true
     },
-    "dsh-notifier": {
+    "@xmanrui/dsh-im": {
       "optional": true
     }
   },

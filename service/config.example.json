@@ -1,0 +1,14 @@
+{
+  "dataDir": "D:\\\\path\\\\to\\\\.dsh-tingxue-data",
+  "profilePath": "D:\\\\path\\\\to\\\\听雪档案.txt",
+  "memoryServiceHost": "127.0.0.1",
+  "memoryServicePort": 8766,
+  "graphDashboardHost": "127.0.0.1",
+  "graphDashboardPort": 8765,
+  "memoriesIdentity": "user",
+  "modelBackend": "sta1n",
+  "embeddingModel": "gemini-embedding-2",
+  "embeddingDimensions": 3072,
+  "llmModel": "gemini-3.1-flash-lite",
+  "credentialsPath": "C:\\\\Users\\\\<you>\\\\.dsh\\\\.credentials.yaml"
+}

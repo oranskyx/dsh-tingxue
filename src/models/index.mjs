@@ -17,9 +17,11 @@
 /**
  * 创建模型适配器。
  * @param {object} config - { modelBackend, embeddingModel, llmModel, baseURL, apiKey, embeddingDimensions }
- * @param {object} deps - { logger, resolveApiKey }
+ * @param {object} deps - { logger, resolveApiKey, getApiKey, getBaseURL }
  *   resolveApiKey: async (envName) => string | undefined —— 从 DSH credentials 服务解析 key
- * @returns {object} { embed, complete, dispose }
+ *   getApiKey:     async () => string —— 每次请求重新解析 key（独立服务用它读 secrets.json）
+ *   getBaseURL:    async () => string —— 每次请求重新解析端点（独立服务用它读 secrets.json）
+ * @returns {object} { embed, complete, listModels, dispose }
  */
 export function createModelAdapter(config, deps = {}) {
   const logger = deps.logger
@@ -33,13 +35,44 @@ export function createModelAdapter(config, deps = {}) {
   // 各后端默认端点
   const ENDPOINTS = {
     sta1n: { base: 'https://cdn.sta1n.cn/v1', apiKeyEnv: 'STA1N_API_KEY' },
-    local: { base: config.baseURL ?? 'http://127.0.0.1:11434/v1', apiKeyEnv: '' },
-    custom: { base: config.baseURL ?? '', apiKeyEnv: '' },
+    local: { base: 'http://127.0.0.1:11434/v1', apiKeyEnv: '' },
+    custom: { base: '', apiKeyEnv: '' },
   }
   const ep = ENDPOINTS[backend] ?? ENDPOINTS.sta1n
 
-  // 从 DSH credentials 服务或环境变量取 key
+  // 端点优先级：config.baseURL（非空）> 后端默认。config.baseURL 对所有后端生效，
+  // 独立服务还会通过 deps.getBaseURL 提供「面板最新值」（secrets.json）作为更高优先。
+  const staticBase = (String(config.baseURL ?? '').trim() || ep.base).replace(/\/+$/, '')
+
+  /**
+   * 当前生效的端点。独立记忆服务注入 getBaseURL，面板改完 apiBaseUrl
+   * 下一次模型调用就生效（无需重启）；插件入口不注入时用构造时的静态值。
+   */
+  async function currentBaseURL() {
+    if (typeof deps.getBaseURL === 'function') {
+      try {
+        const value = String((await deps.getBaseURL()) ?? '').trim()
+        if (value) return value.replace(/\/+$/, '')
+      } catch { /* 回退静态端点 */ }
+    }
+    return staticBase
+  }
+
+  /**
+   * 解析 API Key。优先级：
+   *   1. deps.getApiKey（独立服务：secrets.json > 环境变量 > .credentials.yaml）
+   *   2. config.apiKey（构造时的快照，用于插件入口）
+   *   3. DSH credentials 服务
+   *   4. 环境变量
+   * embedding 与 LLM 两条链路共用本函数，保证同一份 key。
+   */
   async function resolveApiKey() {
+    if (typeof deps.getApiKey === 'function') {
+      try {
+        const value = String((await deps.getApiKey()) ?? '').trim()
+        if (value) return value
+      } catch { /* 回退静态配置 */ }
+    }
     if (config.apiKey) return config.apiKey
     if (ep.apiKeyEnv) {
       // 优先用 DSH credentials 服务
@@ -54,18 +87,26 @@ export function createModelAdapter(config, deps = {}) {
     return ''
   }
 
+  /** 错误文本里如果回显了 key（某些服务端会），替换成 *** 再抛。 */
+  function redact(text, apiKey) {
+    if (!apiKey) return text
+    return String(text).split(apiKey).join('***')
+  }
+
   async function post(path, body) {
     const apiKey = await resolveApiKey()
+    const base = await currentBaseURL()
+    if (!base) throw new Error('模型端点未配置（baseURL 为空，请先在面板配置 API）')
     const headers = { 'Content-Type': 'application/json' }
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`
-    const res = await fetch(`${ep.base}${path}`, {
+    const res = await fetch(`${base}${path}`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
     })
     if (!res.ok) {
       const text = await res.text().catch(() => '')
-      throw new Error(`模型请求失败 ${res.status}: ${text.slice(0, 300)}`)
+      throw new Error(`模型请求失败 ${res.status}: ${redact(text, apiKey).slice(0, 300)}`)
     }
     return res.json()
   }
@@ -81,13 +122,15 @@ export function createModelAdapter(config, deps = {}) {
    */
   async function listModels() {
     const apiKey = await resolveApiKey()
+    const base = await currentBaseURL()
+    if (!base) throw new Error('模型端点未配置（baseURL 为空，请先在面板配置 API）')
     const headers = { accept: 'application/json' }
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`
-    const res = await fetch(`${ep.base}/models`, { method: 'GET', headers })
+    const res = await fetch(`${base}/models`, { method: 'GET', headers })
     if (!res.ok) {
       const text = await res.text().catch(() => '')
       throw new Error(
-        `模型列表请求失败 ${res.status}${res.status === 401 || res.status === 403 ? '（API Key 无效）' : ''}: ${text.slice(0, 200)}`,
+        `模型列表请求失败 ${res.status}${res.status === 401 || res.status === 403 ? '（API Key 无效）' : ''}: ${redact(text, apiKey).slice(0, 200)}`,
       )
     }
     const data = await res.json()
