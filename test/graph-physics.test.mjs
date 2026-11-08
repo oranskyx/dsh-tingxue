@@ -67,3 +67,27 @@ test('斥力预算在面板视口下也能覆盖 402 个实体', () => {
     )
   }
 })
+
+test('近距离斥力必须封顶，否则节点会抽搐', () => {
+  const body = bodyOf('applyRepulsion')
+  assert.match(body, /PHYSICS\.maxPairForce/, '斥力必须被 maxPairForce 截断')
+  assert.match(body, /PHYSICS\.minPairDist/, '斥力必须有距离下限')
+  assert.match(body, /Math\.cos\(angle\)/, '完全重合时必须给一个确定性方向，否则那对节点永远粘死')
+
+  // 读真实数值，确认近距离的力不会把速度顶到 maxVel 附近。
+  const pick = (name) => {
+    const match = source.match(new RegExp(`${name}:\\s*([0-9.]+)`))
+    assert.ok(match, `找不到 PHYSICS.${name}`)
+    return Number(match[1])
+  }
+  const repulsionForce = pick('repulsionForce')
+  const maxPairForce = pick('maxPairForce')
+  const minPairDist = pick('minPairDist')
+  const maxVel = pick('maxVel')
+
+  const worst = Math.min(repulsionForce / (minPairDist * minPairDist), maxPairForce)
+  assert.ok(
+    worst <= maxVel / 3,
+    `最坏情况单帧斥力 ${worst.toFixed(2)} 已经接近 maxVel ${maxVel}，一定会抽搐`,
+  )
+})

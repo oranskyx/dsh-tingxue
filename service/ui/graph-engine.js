@@ -29,6 +29,12 @@
     centerX: 0.01,
     centerY: 0.008,
     maxVel: 12,
+    // 单对斥力上限。原始公式 repulsionForce/dist² 在近距离会爆掉：
+    // dist=2 时 3200/4 = 800，一帧就把速度顶到 maxVel，节点被弹飞，再被弹簧
+    // 拉回来，又弹飞——表现就是「选中几个节点会抽搐」。正常距离 90 时
+    // 3200/8100 ≈ 0.4，远低于这个上限，所以常规布局的外观不变。
+    maxPairForce: 1.5,
+    minPairDist: 8,
     maxTicks: 300,
     resumeTicks: 90
   }
@@ -310,9 +316,21 @@
           var dy = nodeA.y - nodeB.y
           var distSq = dx * dx + dy * dy
           if (distSq >= PHYSICS.repulsionDist * PHYSICS.repulsionDist) continue
-          var safeDistSq = distSq < 4 ? 4 : distSq
-          var dist = Math.sqrt(safeDistSq)
-          var force = PHYSICS.repulsionForce / safeDistSq
+
+          var dist = Math.sqrt(distSq)
+          if (dist < 0.001) {
+            // 两点完全重合：斥力没有方向，这对节点会永远粘死。给一个确定性方向
+            // （按索引算黄金角，同一对每次结果一致，不会随机抖动）。
+            var angle = (i * 2.3999632297286531) + (j * 0.6180339887498949)
+            dx = Math.cos(angle)
+            dy = Math.sin(angle)
+            dist = 1
+          }
+
+          // 两个保护：距离下限 + 力上限。缺任何一个，近距离都会让速度顶到
+          // maxVel 再被弹簧拉回，来回振荡（用户看到的「抽搐」）。
+          var effDist = Math.max(dist, PHYSICS.minPairDist)
+          var force = Math.min(PHYSICS.repulsionForce / (effDist * effDist), PHYSICS.maxPairForce)
           var forceX = (dx / dist) * force
           var forceY = (dy / dist) * force
           velocities[i].x += forceX
