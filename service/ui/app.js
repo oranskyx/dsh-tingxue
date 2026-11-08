@@ -1,7 +1,11 @@
 /* dsh-tingxue · service/ui/app.js
  *
  * 记忆图谱管理界面的全部交互逻辑。零依赖、无构建、classic script（不 import）。
- * 接口契约：service/API.md。所有请求都发到 `(query ?api= 或 '/api') + path`。
+ * 接口契约：service/API.md。所有请求都发到 `(query ?api= 或 'api') + path`。
+ * 默认用**相对路径** 'api' 而不是绝对 '/api'：这个页面会被嵌进 DSH 面板的
+ * iframe 里（src=/dsh-tingxue-graph/），绝对路径会直接打到 dsh-app://app/api/*
+ * 变成 404；相对路径则解析成 /dsh-tingxue-graph/api/*，正好被同源反代接住。
+ * 直接用 http://127.0.0.1:8765/ 打开时，'api' 同样等价于 '/api'。
  *  - 左侧列表：实体 / 关系 / 记忆 / 回收站，分页「加载更多」
  *  - 中间：canvas 力导向图（graph-engine.js），点击选中、搜索高亮、类型过滤
  *  - 右侧：实体 / 关系 / 记忆详情，可编辑、可删除、可新增关系
@@ -34,10 +38,10 @@
   const LIST_ID_ATTR = 'data-item-id'
 
   function normaliseApiBase(raw) {
-    const value = String(raw == null ? '/api' : raw).trim()
-    if (!value) return '/api'
+    const value = String(raw == null ? 'api' : raw).trim()
+    if (!value) return 'api'
     const trimmed = value.replace(/\/+$/, '')
-    return trimmed || '/api'
+    return trimmed || 'api'
   }
 
   function el(tag, props) {
