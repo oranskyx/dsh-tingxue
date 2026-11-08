@@ -1,8 +1,28 @@
 // 验证 qq 分段补丁逻辑：segmentLongText
+//
+// 这个文件验的是**打补丁后的第三方模块**（dsh-notifier），模块本体不在本仓库里，
+// 只存在于本机 profile 的 node_modules。所以：
+//   · 路径不能写死 C:/Users/... —— CI（ubuntu）上必然 ERR_MODULE_NOT_FOUND，
+//     整个文件崩掉会让 `node <file>` 以非零码退出，把 CI 判红；
+//   · 模块不存在时按「跳过」处理（exit 0），并把跳过的原因打出来，
+//     不能假装通过、也不能假装失败。
+// 想跑真断言：设置 DSH_NOTIFIER_SEGMENT=<_qq-segment.mjs 的绝对路径>。
 import assert from 'node:assert'
-const { segmentLongText, needsSegment } = await import(
-  'file:///C:/Users/oransky/.dsh/profiles/web/node_modules/dsh-notifier/src/inbound/_qq-segment.mjs'
-)
+import { existsSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
+
+const CANDIDATES = [
+  process.env.DSH_NOTIFIER_SEGMENT,
+  'C:/Users/oransky/.dsh/profiles/web/node_modules/dsh-notifier/src/inbound/_qq-segment.mjs',
+  'D:/dsh-home/profiles/desktop/node_modules/dsh-notifier/src/inbound/_qq-segment.mjs',
+].filter(Boolean)
+const found = CANDIDATES.find((c) => { try { return existsSync(c) } catch { return false } })
+if (!found) {
+  console.log('skip - 找不到打补丁后的 dsh-notifier/_qq-segment.mjs（本仓库不含该模块）')
+  console.log('      若要真跑：DSH_NOTIFIER_SEGMENT=<绝对路径> node test/patches/_qq-segment.test.mjs')
+  process.exit(0)
+}
+const { segmentLongText, needsSegment } = await import(pathToFileURL(found).href)
 
 let n = 0
 function t(name, fn) {
