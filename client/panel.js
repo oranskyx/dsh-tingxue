@@ -44,7 +44,9 @@ window.__ModuleLoader__.load({
       graph_offline: '图谱界面没有响应：8765 面板没起来。启动记忆服务后刷新即可。',
       graph_fallback: '如果上面是空白，说明内嵌被拦了——',
       graph_open_raw: '在新标签页打开图谱',
-      graph_fallback2: '（同一份数据，只是外面少了面板壳）',
+      graph_counts: '实体 {n} · 关系 {m}',
+      graph_loading: '正在加载图谱…',
+      graph_unnamed: '未命名实体',
       service_offline_title: '记忆服务没在运行',
       service_offline_desc: '8766 没有响应，所以这里既没有图谱数据也没有管理界面。',
       service_start: '启动记忆服务',
@@ -1369,37 +1371,87 @@ window.__ModuleLoader__.load({
      * 也变了 —— 那是让人不信任面板的最快方式。分开之后语义就清楚了：
      * 聊天面板 / agent面板 = 这个 bot 自己的东西；记忆服务面板 = 大家共用的东西。
      */
+    /** 动态加载同源脚本（重复加载只跑一次）。 */
+    const scriptCache = new Map()
+    function loadScript(src) {
+      if (scriptCache.has(src)) return scriptCache.get(src)
+      const promise = new Promise((resolve, reject) => {
+        const el = document.createElement('script')
+        el.src = src
+        el.async = true
+        el.onload = () => resolve()
+        el.onerror = () => reject(new Error('脚本加载失败：' + src))
+        const host = document.head || document.body
+        if (!host) reject(new Error('没有可挂载 script 的位置'))
+        else host.appendChild(el)
+      })
+      scriptCache.set(src, promise)
+      return promise
+    }
+
     /**
-     * 记忆图谱面板：侧边栏直接看图，不用再去开浏览器标签页。
+     * 记忆图谱面板：直接在侧边栏里画图，不开 iframe、不开网页。
      *
-     * 图谱本体是 8765 那套现成界面（canvas 力导向 + 四个管理页签），重写一遍
-     * 既浪费又会引入新 bug。这里用同源反代嵌进面板：
-     *   /dsh-tingxue-graph/*  →  http://127.0.0.1:8765/*
-     * 同源所以 iframe 不被跨域拦，主题跟着面板走。
+     * 引擎复用记忆服务那套 canvas 力导向（service/ui/graph-engine.js 原样拷到
+     * client/graph-engine.js），由宿主用 /dsh-tingxue-ui/assets/graph-engine.js
+     * 同源吐出来——CSP 的 script-src 'self' 正好放行。
+     * 数据走 /dsh-tingxue-graph/graph-data.json（同源反代到 8765）。
      */
     function GraphPage(props) {
       const tr = pageTr(props)
       const [state, reload] = useDashboard()
-      const [boot, setBoot] = React.useState({ busy: false, note: '' })
-      const ping = state.ping || {}
-      const graph = ping.graph || null
-      const memory = ping.memory || null
-      // 两个服务同进程（8766 带 8765），任一探活成功就算在线。
-      const online = (graph && graph.online === true) || (memory && memory.online === true)
+      const canvasRef = React.useRef(null)
+      const apiRef = React.useRef(null)
+      const [view, setView] = React.useState({ status: 'loading', nodes: 0, edges: 0, error: '', selected: null, note: '' })
+
+      React.useEffect(() => {
+        let disposed = false
+        async function boot() {
+          await loadScript('/dsh-tingxue-ui/assets/graph-engine.js')
+          if (disposed || !canvasRef.current) return
+          if (!window.TXGraph) throw new Error('图谱引擎没有挂上 window.TXGraph')
+          const res = await fetch('/dsh-tingxue-graph/graph-data.json', { cache: 'no-store' })
+          if (!res.ok) throw new Error('图谱数据拿不到（HTTP ' + res.status + '）')
+          const data = await res.json()
+          if (disposed) return
+          const api = window.TXGraph.create(canvasRef.current, {
+            onSelect: (id) => {
+              const node = (data.nodes || []).find((n) => n.id === id) || null
+              setView((v) => ({ ...v, selected: node }))
+            },
+            onClearSelection: () => setView((v) => ({ ...v, selected: null })),
+          })
+          apiRef.current = api
+          api.setData(data.nodes || [], data.links || [])
+          try { api.fit() } catch (error) { /* 空图时 fit 可能无事可做 */ }
+          const counts = typeof api.getCounts === 'function'
+            ? api.getCounts()
+            : { nodes: (data.nodes || []).length, edges: (data.links || []).length }
+          setView((v) => ({ ...v, status: 'ready', nodes: counts.nodes || 0, edges: counts.edges || 0 }))
+        }
+        boot().catch((error) => {
+          if (!disposed) setView((v) => ({ ...v, status: 'error', error: String((error && error.message) || error) }))
+        })
+        return () => {
+          disposed = true
+          try { if (apiRef.current && typeof apiRef.current.destroy === 'function') apiRef.current.destroy() } catch (e) { /* 卸载期间忽略 */ }
+          apiRef.current = null
+        }
+      }, [])
 
       async function startService() {
-        setBoot({ busy: true, note: '' })
+        setView((v) => ({ ...v, note: tr('service_starting', '正在启动…') }))
         try {
           const res = await fetch('/dsh-tingxue-ui/service/start', { method: 'POST' })
           const data = await res.json().catch(() => ({}))
           if (data && data.ok) {
-            setBoot({ busy: false, note: tr('service_started', '已启动，正在刷新…') })
+            setView((v) => ({ ...v, note: tr('service_started', '已启动，正在刷新…') }))
             reload()
           } else {
-            setBoot({ busy: false, note: tr('service_start_failed', '启动失败：{reason}').replace('{reason}', (data && (data.error || data.message)) || res.status) })
+            setView((v) => ({ ...v, note: tr('service_start_failed', '启动失败：{reason}').replace('{reason}', (data && (data.error || data.message)) || res.status) }))
           }
         } catch (error) {
-          setBoot({ busy: false, note: tr('service_start_failed', '启动失败：{reason}').replace('{reason}', String(error && error.message || error)) })
+          setView((v) => ({ ...v, note: tr('service_start_failed', '启动失败：{reason}').replace('{reason}', String((error && error.message) || error)) }))
         }
       }
 
@@ -1408,40 +1460,27 @@ window.__ModuleLoader__.load({
         h('div', { className: 'txu-inner txu-inner-graph' },
           h(PageHeader, {
             title: tr('graph_title', '记忆图谱'),
-            sub: tr('graph_sub', '实体关系可视化 · 实体 / 关系 / 记忆 / 回收站'),
+            sub: view.status === 'ready'
+              ? tr('graph_counts', '实体 {n} · 关系 {m}').replace('{n}', view.nodes).replace('{m}', view.edges)
+              : tr('graph_sub', '实体关系可视化'),
             state, tr, onRefresh: reload,
           }),
-          !online && state.status !== 'loading'
-            ? h(Card, { key: 'svc' },
-              h('div', { className: 'txu-row', style: { justifyContent: 'space-between', alignItems: 'center', gap: '12px' } },
-                h('div', null,
-                  h('div', { style: { fontWeight: 600 } }, tr('service_offline_title', '记忆服务没在运行')),
-                  h('div', { className: 'txu-muted' }, tr('service_offline_desc', '8766 没有响应，所以这里既没有图谱数据也没有管理界面。'))),
-                h('button', {
-                  type: 'button',
-                  className: 'txu-btn txu-btn-primary',
-                  disabled: boot.busy,
-                  onClick: startService,
-                }, boot.busy ? tr('service_starting', '正在启动…') : tr('service_start', '启动记忆服务'))),
-              boot.note ? h('p', { className: 'txu-muted', style: { marginTop: '8px' } }, boot.note) : null)
+          view.status === 'error'
+            ? h(Card, { key: 'graph-error' },
+              h('div', { style: { fontWeight: 600 } }, tr('service_offline_title', '记忆服务没在运行')),
+              h('div', { className: 'txu-muted', style: { margin: '6px 0 10px' } }, view.error),
+              h('button', { type: 'button', className: 'txu-btn', onClick: startService }, tr('service_start', '启动记忆服务')),
+              view.note ? h('p', { className: 'txu-muted', style: { marginTop: '8px' } }, view.note) : null)
             : null,
-          online
-            ? h('iframe', {
-              className: 'txu-graph-frame',
-              src: '/dsh-tingxue-graph/',
-              title: tr('graph_title', '记忆图谱'),
-            })
-            : null,
-          online ? h('p', { className: 'txu-muted', style: { marginTop: '8px' } },
-            tr('graph_fallback', '如果上面是空白，说明内嵌被拦了——') ,
-            h('a', {
-              href: 'http://127.0.0.1:8765/',
-              target: '_blank',
-              rel: 'noreferrer',
-              style: { color: 'var(--dsw-alias-state-business-primary, #4c8dff)' },
-            }, tr('graph_open_raw', '在新标签页打开图谱')),
-            tr('graph_fallback2', '（同一份数据，只是外面少了面板壳）'))
-            : null))
+          h('div', { className: 'txu-graph-wrap' },
+            h('canvas', { ref: canvasRef, className: 'txu-graph-canvas', tabIndex: 0 }),
+            view.selected
+              ? h('div', { className: 'txu-graph-detail' },
+                h('div', { className: 'txu-graph-detail-title' }, view.selected.name || tr('graph_unnamed', '未命名实体')),
+                h('div', { className: 'txu-muted' },
+                  (view.selected.type || '') + (view.selected.summary ? ' · ' + view.selected.summary : '')))
+              : null),
+          view.status === 'loading' ? h('p', { className: 'txu-muted' }, tr('graph_loading', '正在加载图谱…')) : null))
     }
 
     function MemoryPage(props) {
@@ -1477,7 +1516,10 @@ window.__ModuleLoader__.load({
 .txu-page{box-sizing:border-box;height:100%;overflow-y:auto;padding:22px 28px 48px;color:var(--dsw-alias-label-primary,inherit);font-family:inherit;-webkit-font-smoothing:antialiased}
 .txu-inner{max-width:980px;margin:0 auto}
 .txu-inner-graph{max-width:none}
-.txu-graph-frame{display:block;width:100%;min-height:calc(100vh - 210px);border:0;border-radius:12px;background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.06));color-scheme:light dark}
+.txu-graph-wrap{position:relative;flex:1 1 auto;min-height:calc(100vh - 250px);border-radius:12px;overflow:hidden;background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.06));border:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.35))}
+.txu-graph-canvas{display:block;width:100%;height:100%;min-height:calc(100vh - 250px);touch-action:none;outline:none}
+.txu-graph-detail{position:absolute;right:12px;top:12px;max-width:300px;padding:10px 12px;border-radius:10px;background:var(--dsw-alias-bg-layer-2,rgba(127,127,127,.12));border:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.35));font-size:12px;line-height:1.5}
+.txu-graph-detail-title{font-weight:600;margin-bottom:4px;font-size:13px}
 .txu-head{display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:18px}
 .txu-title-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .txu-title{font-size:20px;font-weight:600;line-height:1.35;letter-spacing:.01em}

@@ -22,6 +22,7 @@ const ctx = {
 apply(ctx, {})
 
 const graphRoute = registered.find((r) => r.path === '/dsh-tingxue-graph')
+const assetRoute = registered.find((r) => r.path === '/dsh-tingxue-ui/assets')
 if (!graphRoute) {
   console.error('FAIL: 没有注册 /dsh-tingxue-graph 路由')
   console.error('已注册: ' + registered.map((r) => r.path).join(', '))
@@ -31,6 +32,7 @@ console.log('路由已注册: ' + graphRoute.path + ' (' + graphRoute.kind + ')'
 
 const server = http.createServer((req, res) => {
   if (req.url.startsWith('/dsh-tingxue-graph')) return graphRoute.handler(req, res)
+  if (req.url.startsWith('/dsh-tingxue-ui/assets') && assetRoute) return assetRoute.handler(req, res)
   res.writeHead(404).end('no route')
 })
 
@@ -44,6 +46,8 @@ const checks = [
   { path: '/dsh-tingxue-graph/styles.css', expect: 200, type: 'css', needle: null },
   { path: '/dsh-tingxue-graph/graph-data.json', expect: 200, type: 'json', needle: '"nodes"' },
   { path: '/dsh-tingxue-graph/api/health', expect: 200, type: 'json', needle: '"ok"' },
+  { path: '/dsh-tingxue-ui/assets/graph-engine.js', expect: 200, type: 'javascript', needle: 'TXGraph' },
+  { path: '/dsh-tingxue-ui/assets/../panel-host.mjs', expect: 404, type: '', needle: null },
 ]
 
 let failed = 0
