@@ -12,6 +12,8 @@
   "profilePath": "",
   "memoryServiceHost": "127.0.0.1",
   "memoryServicePort": 8766,
+  "graphDashboardHost": "127.0.0.1",
+  "graphDashboardPort": 8765,
   "memoriesIdentity": "user",
   "modelBackend": "sta1n",
   "embeddingModel": "gemini-embedding-2",

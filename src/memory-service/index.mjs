@@ -14,13 +14,13 @@
 //   §4 记忆管理：/memory/memories、/memory/memories/:id、/memory/memories/:id/reextract
 //   §5 统计/回收站/审计：/memory/stats、/memory/trash、/memory/trash/:id/restore、/memory/audit
 //   §6 配置：GET/PUT /config（apiBaseUrl 可回显；apiKey 写入 <dataDir>/secrets.json 且永不回显）
-//   §7 图谱数据：/graph-data.json（{nodes,links}）。8765 的深色网页面板已删除，
+//   §7 图谱 UI：同进程另起 8765，serving service/ui/，/api/* 走同一处理器，/graph-data.json
 //
 // 约定：成功 {ok:true,...}；失败 {ok:false,error,code?}；所有 Int64 已由 store 转 Number。
 
 import { createServer } from 'node:http'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, extname, join, resolve, sep } from 'node:path'
 
 import { findPort, readBody, sendJson } from '../http/index.mjs'
 import { createMemoryManagement, ManageError } from '../memory/manage.mjs'
@@ -33,6 +33,8 @@ const MAX_LIMIT = 500
 
 /** API.md §0：只对这两个来源放行 CORS。 */
 const CORS_ORIGINS = new Set([
+  'http://127.0.0.1:8765',
+  'http://localhost:8765',
 ])
 const CORS_METHODS = 'GET, POST, PATCH, DELETE, OPTIONS'
 
@@ -42,7 +44,7 @@ const CORS_METHODS = 'GET, POST, PATCH, DELETE, OPTIONS'
  */
 const CONFIG_KEYS = [
   'dataDir', 'profilePath', 'memoryServiceHost', 'memoryServicePort',
-  'memoriesIdentity',
+  'graphDashboardHost', 'graphDashboardPort', 'memoriesIdentity',
   'modelBackend', 'embeddingModel', 'embeddingDimensions', 'llmModel',
 ]
 /**
@@ -51,15 +53,63 @@ const CONFIG_KEYS = [
  * （模型适配器每次请求重新解析），不需要重启。
  */
 const SECRET_KEYS = ['apiBaseUrl', 'apiKey']
-/** 改这些字段需要重启进程。 */
-const RESTART_KEYS = new Set(CONFIG_KEYS)
+/** 改这些字段需要重启进程；graphDashboardHost/Port 可运行期即时生效。 */
+const RESTART_KEYS = new Set(CONFIG_KEYS.filter((key) => key !== 'graphDashboardHost' && key !== 'graphDashboardPort'))
 
+const MIME_TYPES = {
+  '.html': 'text/html; charset=utf-8',
+  '.htm': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.map': 'application/json; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
+}
+
+/** service/ui 不存在时的最小占位页：不报错，DSH iframe 里至少能看到说明。 */
+const PLACEHOLDER_HTML = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>听雪 · 图谱</title>
+<style>
+  html,body{height:100%;margin:0}
+  body{display:flex;align-items:center;justify-content:center;background:#0a0e1a;color:#eef2fb;
+    font-family:"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+  .box{max-width:520px;padding:32px;border:1px solid rgba(122,168,255,.25);border-radius:16px;
+    background:rgba(20,26,46,.9);text-align:center;line-height:1.8}
+  h1{font-size:18px;margin:0 0 10px;color:#7aa8ff}
+  p{font-size:13px;color:#93a0bd;margin:6px 0}
+  code{color:#ffd166}
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>听雪 · 关系图谱</h1>
+  <p>图谱 UI 静态资源尚未安装（缺少 <code>service/ui/index.html</code>）。</p>
+  <p>记忆管理 API 仍可正常使用：<code>/api/health</code>、<code>/api/memory/stats</code>。</p>
+</div>
+</body>
+</html>`
 
 /**
  * 创建记忆服务。
  * @param {object} deps - { store, model, graph, profilePath, logger,
- *                          dataDir, configPath, configView, apiKeyPresent }
- * @param {object} config - { memoryServiceHost, memoryServicePort, memoriesIdentity }
+ *                          dataDir, configPath, configView, apiKeyPresent, uiDir }
+ * @param {object} config - { memoryServiceHost, memoryServicePort, memoriesIdentity,
+ *                            graphDashboardHost, graphDashboardPort }
  */
 export function createMemoryService(deps = {}, config = {}) {
   const { store, model, graph, profilePath, logger } = deps
@@ -86,7 +136,12 @@ export function createMemoryService(deps = {}, config = {}) {
     deps.dataDir ?? config.dataDir ?? store?.dataDir ?? '',
   ).trim()
   const configPath = deps.configPath ? resolve(String(deps.configPath)) : ''
+  const uiDir = deps.uiDir ? resolve(String(deps.uiDir)) : ''
   const apiKeyPresent = Boolean(deps.apiKeyPresent)
+
+  // 可运行期变更的图谱 UI 地址（PUT /config 即时生效）。
+  let uiHost = String(config.graphDashboardHost ?? deps.configView?.graphDashboardHost ?? '127.0.0.1')
+  let uiPort = config.graphDashboardPort ?? deps.configView?.graphDashboardPort
 
   /**
    * 配置展示视图（脱敏）：字段白名单 + 端口等以运行期实际值为准。
@@ -97,6 +152,8 @@ export function createMemoryService(deps = {}, config = {}) {
     profilePath: String(profilePath ?? ''),
     memoryServiceHost: host,
     memoryServicePort: Number(port),
+    graphDashboardHost: uiHost,
+    graphDashboardPort: uiPort === undefined || uiPort === null ? null : Number(uiPort),
     memoriesIdentity: serverIdentity,
     modelBackend: '',
     embeddingModel: '',
@@ -109,6 +166,8 @@ export function createMemoryService(deps = {}, config = {}) {
 
   let server = null
   let boundUrl = ''
+  let uiServer = null
+  let uiUrl = ''
 
   // ---- 写队列：所有写操作串行化 ----
   let writeChain = Promise.resolve()
@@ -131,7 +190,7 @@ export function createMemoryService(deps = {}, config = {}) {
 
   // ---- 通用工具 ----
 
-  /** CORS：只对本机 loopback 来源回显（跨源直连时需要）。 */
+  /** CORS：仅对 API.md §0 列出的 8765 来源回显。 */
   function applyCors(req, res) {
     const origin = req.headers?.origin
     if (!origin || !CORS_ORIGINS.has(origin)) return
@@ -254,7 +313,7 @@ export function createMemoryService(deps = {}, config = {}) {
     for (const key of CONFIG_KEYS) {
       if (!Object.prototype.hasOwnProperty.call(body, key)) continue
       const value = body[key]
-      if (key === 'memoryServicePort') {
+      if (key === 'memoryServicePort' || key === 'graphDashboardPort') {
         const number = Number(value)
         if (!Number.isInteger(number) || number < 0 || number > 65535) {
           throw new ManageError(400, `${key} 必须是 0-65535 的整数`, { code: 'invalid-config' })
@@ -341,6 +400,7 @@ export function createMemoryService(deps = {}, config = {}) {
     await writeFile(configPath, `${JSON.stringify(merged, null, 2)}\n`, 'utf8')
 
     let restartRequired = false
+    let uiChanged = false
     for (const [key, value] of Object.entries(patch)) {
       const previous = configView[key]
       const changed = (key.endsWith('Port') || key === 'embeddingDimensions')
@@ -349,9 +409,21 @@ export function createMemoryService(deps = {}, config = {}) {
       configView[key] = value
       if (!changed) continue
       if (RESTART_KEYS.has(key)) restartRequired = true
+      if (key === 'graphDashboardHost' || key === 'graphDashboardPort') uiChanged = true
     }
 
-    return { restartRequired, warning: '' }
+    let warning = ''
+    if (uiChanged) {
+      uiHost = String(configView.graphDashboardHost ?? uiHost)
+      uiPort = configView.graphDashboardPort
+      try {
+        await restartUiServer()
+      } catch (error) {
+        warning = `图谱 UI 重启失败: ${error.message}`
+        warn(warning)
+      }
+    }
+    return { restartRequired, warning }
   }
 
   // ---- 图数据（兼容旧 UI：nodes + links；旧 dashboard 另认 edges） ----
@@ -389,7 +461,7 @@ export function createMemoryService(deps = {}, config = {}) {
     }
   }
 
-  // ---- 主处理器 ----
+  // ---- 主处理器（8766 API 与 8765 /api 别名共用） ----
 
   async function handle(req, res, overrideUrl) {
     const rawUrl = overrideUrl ?? req.url ?? '/'
@@ -725,6 +797,16 @@ export function createMemoryService(deps = {}, config = {}) {
         return sendJson(res, 200, { ok: true, profile })
       }
 
+      // ---- §7 8766 /graph → 8765 图谱 UI（可选重定向） ----
+      if (method === 'GET' && (url === '/graph' || url === '/graph/')) {
+        if (uiUrl) {
+          res.writeHead(302, { Location: `${uiUrl}/` })
+          res.end()
+          return
+        }
+        return sendJson(res, 404, { ok: false, error: '图谱 UI 未启用' })
+      }
+
       // ---- 健康检查 ----
       if (method === 'GET' && (url === '/' || url === '/health')) {
         return sendJson(res, 200, { ok: true, service: 'dsh-tingxue-memory', port: server?.address()?.port ?? port })
@@ -748,6 +830,93 @@ export function createMemoryService(deps = {}, config = {}) {
     }
   }
 
+  // ---- §7 8765 图谱 UI / 静态资源 / 同源 /api 别名 ----
+
+  function contentTypeFor(path) {
+    return MIME_TYPES[extname(path).toLowerCase()] ?? 'application/octet-stream'
+  }
+
+  async function serveIndex(res, method) {
+    let html = null
+    if (uiDir) {
+      try {
+        html = await readFile(join(uiDir, 'index.html'), 'utf8')
+      } catch { /* 目录/文件不存在 → 占位页 */ }
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' })
+    res.end(method === 'HEAD' ? undefined : (html ?? PLACEHOLDER_HTML))
+  }
+
+  async function serveStatic(res, pathname, method) {
+    if (!uiDir) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
+      res.end('not found')
+      return
+    }
+    // 允许 /ui/app.js 与 /app.js 两种相对资源路径；禁止路径穿越。
+    const relative = pathname.startsWith('/ui/') ? pathname.slice(4) : pathname
+    const base = resolve(uiDir)
+    const target = resolve(base, relative.replace(/^\/+/, ''))
+    if (target !== base && !target.startsWith(base + sep)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
+      res.end('forbidden')
+      return
+    }
+    try {
+      const data = await readFile(target)
+      res.writeHead(200, {
+        'Content-Type': contentTypeFor(target),
+        'Cache-Control': 'no-store',
+      })
+      res.end(method === 'HEAD' ? undefined : data)
+    } catch {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
+      res.end('not found')
+    }
+  }
+
+  async function handleUi(req, res) {
+    const method = req.method || 'GET'
+    applyCors(req, res)
+    if (method === 'OPTIONS') {
+      res.writeHead(204)
+      res.end()
+      return
+    }
+    let parsed
+    try {
+      parsed = new URL(req.url || '/', 'http://127.0.0.1')
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' })
+      res.end('bad request')
+      return
+    }
+    const pathname = parsed.pathname
+
+    // 同源别名：/api/* 交给与 8766 完全相同的处理器。
+    if (pathname === '/api' || pathname.startsWith('/api/')) {
+      const subPath = pathname.slice(4) || '/'
+      return handle(req, res, `${subPath}${parsed.search}`)
+    }
+
+    // 旧页面数据：{nodes,links}（另附 edges 兼容旧 dashboard）。
+    if (pathname === '/graph-data.json' || pathname === '/graph.json') {
+      const payload = await collectGraphData()
+      return sendJson(res, 200, payload)
+    }
+
+    if (method !== 'GET' && method !== 'HEAD') {
+      res.writeHead(405, { 'Content-Type': 'text/plain; charset=utf-8' })
+      res.end('method not allowed')
+      return
+    }
+
+    if (pathname === '/' || pathname === '/graph' || pathname === '/graph/') {
+      return serveIndex(res, method)
+    }
+    return serveStatic(res, pathname, method)
+  }
+
   // ---- 启动 / 停止 ----
 
   async function listen(serverInstance, listenPort, listenHost) {
@@ -757,6 +926,40 @@ export function createMemoryService(deps = {}, config = {}) {
       serverInstance.once('error', reject)
     })
     return serverInstance.address()?.port ?? listenPort
+  }
+
+  /** 启动 8765 图谱 UI（若配置了端口）。失败不拖垮记忆 API。 */
+  async function startUiServer() {
+    if (uiServer) return uiUrl
+    if (uiPort === undefined || uiPort === null) return ''
+    const wanted = Number(uiPort)
+    const actualPort = Number.isInteger(wanted) && wanted >= 0 ? wanted : 0
+    const instance = createServer(async (req, res) => {
+      try {
+        await handleUi(req, res)
+      } catch (error) {
+        warn(`图谱 UI 请求处理失败: ${error.message}`)
+        if (!res.writableEnded) sendJson(res, 500, { ok: false, error: error.message })
+      }
+    })
+    const bound = await listen(instance, actualPort, uiHost)
+    uiServer = instance
+    uiUrl = `http://${uiHost}:${bound}`
+    info(`图谱 UI 已启动：${uiUrl}（静态目录：${uiDir || '(未配置，占位页)'}；/api 同源别名）`)
+    return uiUrl
+  }
+
+  async function stopUiServer() {
+    if (!uiServer) return
+    const instance = uiServer
+    uiServer = null
+    uiUrl = ''
+    try { await new Promise((resolveClose) => instance.close(resolveClose)) } catch { /* 忽略 */ }
+  }
+
+  async function restartUiServer() {
+    await stopUiServer()
+    return startUiServer()
   }
 
   /** 启动 HTTP 服务。返回启动成功的 URL 或 null。 */
@@ -783,10 +986,20 @@ export function createMemoryService(deps = {}, config = {}) {
       server = null
       return null
     }
+
+    // 同一进程内再起 8765（UI + 同源 /api）；失败只告警，不影响记忆 API。
+    try {
+      await startUiServer()
+    } catch (e) {
+      warn(`图谱 UI 启动失败: ${e.message}`)
+      uiServer = null
+      uiUrl = ''
+    }
     return boundUrl
   }
 
   async function stop() {
+    await stopUiServer()
     if (!server) return
     try { await new Promise((r) => server.close(r)) } catch {}
     server = null
@@ -796,5 +1009,6 @@ export function createMemoryService(deps = {}, config = {}) {
     start,
     stop,
     get url() { return boundUrl },
+    get graphUrl() { return uiUrl },
   }
 }

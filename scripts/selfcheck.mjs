@@ -65,6 +65,7 @@ const STARTED_ARG = (() => {
 
 const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), '.dsh')
 const MEMORY_PORT = 8766
+const DASH_PORT = 8765
 const WEB_PORT = 3080
 const PLUGIN_NAME = 'dsh-tingxue'
 
@@ -589,6 +590,15 @@ async function checkEndpoints(dataDir) {
     else warn('人格档案', `HTTP ${r.status} ${JSON.stringify(j)?.slice(0, 120)}`)
   } catch (e) {
     warn('人格档案', `读取失败：${e.message}`)
+  }
+
+  // 图谱面板
+  try {
+    const r = await fetch(`http://127.0.0.1:${DASH_PORT}/`, { signal: AbortSignal.timeout(5000) })
+    if (r.ok) ok('图谱面板 8765', `HTTP ${r.status}`)
+    else warn('图谱面板 8765', `HTTP ${r.status}`)
+  } catch (e) {
+    warn('图谱面板 8765', `连不上：${e.message}`)
   }
 
   // 模型目录路由：POST 带坏 key 只验「路由在不在」，不耗真实模型调用

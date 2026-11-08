@@ -31,6 +31,8 @@ const DEFAULTS = Object.freeze({
   profilePath: join(repoRoot, '听雪档案.txt'),
   memoryServiceHost: '127.0.0.1',
   memoryServicePort: 8766,
+  graphDashboardHost: '127.0.0.1',
+  graphDashboardPort: 8765,
   memoriesIdentity: 'user',
   modelBackend: 'sta1n',
   embeddingModel: 'gemini-embedding-2',
@@ -96,6 +98,8 @@ const config = {
   ...(process.env.TINGXUE_PROFILE_PATH ? { profilePath: process.env.TINGXUE_PROFILE_PATH } : {}),
   ...(process.env.TINGXUE_MEMORY_HOST ? { memoryServiceHost: process.env.TINGXUE_MEMORY_HOST } : {}),
   ...(process.env.TINGXUE_MEMORY_PORT ? { memoryServicePort: Number(process.env.TINGXUE_MEMORY_PORT) } : {}),
+  ...(process.env.TINGXUE_GRAPH_HOST ? { graphDashboardHost: process.env.TINGXUE_GRAPH_HOST } : {}),
+  ...(process.env.TINGXUE_GRAPH_PORT ? { graphDashboardPort: Number(process.env.TINGXUE_GRAPH_PORT) } : {}),
 }
 
 /**
@@ -183,6 +187,8 @@ const configView = {
   profilePath: config.profilePath,
   memoryServiceHost: config.memoryServiceHost,
   memoryServicePort: config.memoryServicePort,
+  graphDashboardHost: config.graphDashboardHost,
+  graphDashboardPort: config.graphDashboardPort,
   memoriesIdentity: config.memoriesIdentity,
   modelBackend: config.modelBackend,
   embeddingModel: config.embeddingModel,
@@ -223,11 +229,14 @@ const service = createMemoryService(
     apiKeyPresent: Boolean(startupKey.key),
     resolveApiKeyInfo,
     resolveApiBaseUrl: resolveRuntimeApiBaseUrl,
+    uiDir: join(here, 'ui'),
   },
   {
     memoryServiceHost: config.memoryServiceHost,
     memoryServicePort: config.memoryServicePort,
     memoriesIdentity: config.memoriesIdentity,
+    graphDashboardHost: config.graphDashboardHost,
+    graphDashboardPort: config.graphDashboardPort,
   },
 )
 
@@ -237,6 +246,7 @@ if (!url) {
   process.exit(1)
 }
 logger.info(`记忆服务已就绪：${url}`)
+if (service.graphUrl) logger.info(`图谱 UI：${service.graphUrl}/graph`)
 
 let stopping = false
 async function shutdown(signal) {

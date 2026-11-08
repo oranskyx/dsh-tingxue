@@ -1,10 +1,10 @@
 // dsh-tingxue test/manage-api.test.mjs
 // 管理 API 集成测试（service/API.md §2-§8）：
 //  - 真实 LanceDB（**临时 dataDir**）+ 假模型（确定性向量）+ 假图谱。
-//  - 不写真实库、不占用 8766（用 18766，占位服务用随机端口）。
+//  - 不写真实库、不占用 8765/8766（用 18766/18765，占位服务用随机端口）。
 //  - 覆盖：实体 CRUD/冲突、关系 CRUD/自环、记忆 PATCH 重嵌入、删实体级联+摘引用、
 //    合并、回收站恢复（含 409 冲突）、审计、统计、分页/过滤、配置脱敏、
-//    实体/关系/记忆/回收站/审计/配置、CORS、重启后文件持久化。
+//    8765 UI/静态资源//api 同源别名//graph-data.json、CORS、重启后文件持久化。
 
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
@@ -16,10 +16,12 @@ import { createMemoryStore } from '../src/memory/store.mjs'
 import { createMemoryService } from '../src/memory-service/index.mjs'
 
 const API_PORT = 18766
+const UI_PORT = 18765
 const API_KEY_MARKER = 'sk-live-should-never-leak'
 
 const root = await mkdtemp(join(tmpdir(), 'tingxue-manage-test-'))
 const dataDir = join(root, 'data')
+const uiDir = join(root, 'ui')
 const configPath = join(root, 'config.json')
 
 /** 确定性 4 维向量：同样文本 → 同样向量。 */
@@ -65,6 +67,7 @@ const configView = {
   memoryServiceHost: '127.0.0.1',
   memoryServicePort: API_PORT,
   graphDashboardHost: '127.0.0.1',
+  graphDashboardPort: UI_PORT,
   memoriesIdentity: 'user',
   modelBackend: 'fake',
   embeddingModel: 'fake-embedding',
@@ -75,6 +78,7 @@ const configView = {
 let store
 let svc
 let base
+let uiBase
 
 /** 发请求并解析 JSON（解析失败时保留 text 便于断言 BigInt 挂起类问题）。 */
 async function call(path, { method = 'GET', body, target = base, origin } = {}) {
@@ -108,6 +112,12 @@ async function createRelation(sourceId, targetId, relation) {
 
 before(async () => {
   await mkdir(dataDir, { recursive: true })
+  await mkdir(uiDir, { recursive: true })
+  await writeFile(join(uiDir, 'index.html'),
+    '<!DOCTYPE html><html><head><link rel="stylesheet" href="./styles.css"></head>'
+    + '<body><h1>TEST-UI</h1><script src="./app.js"></script></body></html>\n')
+  await writeFile(join(uiDir, 'styles.css'), 'body{color:#fff}\n')
+  await writeFile(join(uiDir, 'app.js'), 'console.log("test-ui")\n')
   // 配置文件里的未知字段必须在 PUT 后保留。
   await writeFile(configPath, `${JSON.stringify({ llmModel: 'initial-llm', customUnknown: 'keep-me' }, null, 2)}\n`)
 
@@ -123,15 +133,20 @@ before(async () => {
       configPath,
       configView,
       apiKeyPresent: true,
+      uiDir,
     },
     {
       memoryServiceHost: '127.0.0.1',
       memoryServicePort: API_PORT,
       memoriesIdentity: 'user',
-        },
+      graphDashboardHost: '127.0.0.1',
+      graphDashboardPort: UI_PORT,
+    },
   )
   base = await svc.start()
+  uiBase = svc.graphUrl
   assert.ok(base, '记忆 API 应启动成功')
+  assert.ok(uiBase, '图谱 UI 应启动成功')
 })
 
 after(async () => {
@@ -640,6 +655,7 @@ test('配置：GET 脱敏（绝不回显 key）+ PUT 写文件/保留未知字�
   assert.equal(got.json.hasApiKey, true)
   assert.equal(got.json.config.dataDir, dataDir)
   assert.equal(got.json.config.memoryServicePort, API_PORT)
+  assert.equal(got.json.config.graphDashboardPort, UI_PORT)
   assert.equal('apiKey' in got.json.config, false, '配置响应不得包含 apiKey')
   assert.equal(got.text.includes(API_KEY_MARKER), false, '响应文本不得泄露 key')
   assert.equal(typeof got.json.config.apiBaseUrl, 'string', 'apiBaseUrl 必须回显')
@@ -707,8 +723,10 @@ test('配置：GET 脱敏（绝不回显 key）+ PUT 写文件/保留未知字�
   assert.equal(secretsAfterClear === null || !('apiKey' in secretsAfterClear), true)
   assert.equal((await call('/config')).json.apiKeySource, 'external')
 
-  // 端口/身份变更重启生效
-  const samePort = await call('/config', { method: 'PUT', body: { memoryServicePort: API_PORT } })
+  // 端口/身份变更重启生效；graph 端口即时生效
+  const samePort = await call('/config', {
+    method: 'PUT', body: { graphDashboardPort: UI_PORT },
+  })
   assert.equal(samePort.status, 200)
   assert.equal(samePort.json.restartRequired, false)
 
@@ -738,9 +756,134 @@ test('配置：GET 脱敏（绝不回显 key）+ PUT 写文件/保留未知字�
     method: 'PUT', body: { apiKey: 123 },
   })).status, 400)
   assert.equal((await call('/config', {
-    method: 'PUT', body: { memoryServicePort: 70000 },
+    method: 'PUT', body: { graphDashboardPort: 70000 },
   })).status, 400)
 })
+
+// ---------------------------------------------------------------- §7 UI / 静态 / 同源 / CORS
+
+test('8765：UI 页面、相对静态资源、/ui/*、/api 同源别名、/graph-data.json', async () => {
+  const index = await call('/', { target: uiBase })
+  assert.equal(index.status, 200)
+  assert.match(index.headers.get('content-type') ?? '', /text\/html/)
+  assert.ok(index.text.includes('TEST-UI'))
+
+  const graphPage = await call('/graph', { target: uiBase })
+  assert.equal(graphPage.status, 200)
+  assert.ok(graphPage.text.includes('TEST-UI'), '/graph 必须返回 index.html')
+
+  // /graph 的相对路径 ./styles.css、./app.js 解析到根路径，必须命中 service/ui
+  const css = await call('/styles.css', { target: uiBase })
+  assert.equal(css.status, 200)
+  assert.match(css.headers.get('content-type') ?? '', /text\/css/)
+  assert.match(css.headers.get('cache-control') ?? '', /no-store/)
+
+  const js = await call('/app.js', { target: uiBase })
+  assert.equal(js.status, 200)
+  assert.match(js.headers.get('content-type') ?? '', /text\/javascript/)
+
+  const uiPrefixed = await call('/ui/app.js', { target: uiBase })
+  assert.equal(uiPrefixed.status, 200)
+  assert.match(uiPrefixed.headers.get('content-type') ?? '', /text\/javascript/)
+
+  const missingAsset = await call('/no-such-asset.js', { target: uiBase })
+  assert.equal(missingAsset.status, 404)
+
+  // 同源 /api 别名 → 与 8766 完全相同的处理器
+  const apiHealth = await call('/api/health', { target: uiBase })
+  assert.equal(apiHealth.status, 200)
+  assert.equal(apiHealth.json.service, 'dsh-tingxue-memory')
+
+  const apiStats = await call('/api/memory/stats', { target: uiBase })
+  assert.equal(apiStats.status, 200)
+  assert.equal(apiStats.json.ok, true)
+
+  const graphData = await call('/graph-data.json', { target: uiBase })
+  assert.equal(graphData.status, 200)
+  assert.ok(Array.isArray(graphData.json.nodes))
+  assert.ok(Array.isArray(graphData.json.links))
+  assert.ok(graphData.json.nodes.length > 0, '图谱数据应来自 store')
+  const nodeIds = new Set(graphData.json.nodes.map((node) => node.id))
+  assert.ok(graphData.json.links.every((link) => nodeIds.has(link.source) && nodeIds.has(link.target)))
+
+  // CORS：来自 8765 的来源放行
+  const preflightApi = await fetch(`${base}/memory/entities`, {
+    method: 'OPTIONS',
+    headers: {
+      Origin: 'http://127.0.0.1:8765',
+      'Access-Control-Request-Method': 'PATCH',
+    },
+  })
+  assert.equal(preflightApi.status, 204)
+  assert.equal(preflightApi.headers.get('access-control-allow-origin'), 'http://127.0.0.1:8765')
+  assert.match(preflightApi.headers.get('access-control-allow-methods') ?? '', /PATCH/)
+
+  const preflightUi = await call('/api/memory/entities', {
+    method: 'OPTIONS', target: uiBase, origin: 'http://localhost:8765',
+  })
+  assert.equal(preflightUi.status, 204)
+  assert.equal(preflightUi.headers.get('access-control-allow-origin'), 'http://localhost:8765')
+})
+
+test('8765：service/ui 不存在时返回最小占位页（不报错）', async () => {
+  const placeholderService = createMemoryService(
+    {
+      store,
+      model: fakeModel,
+      graph: fakeGraph,
+      profilePath: '',
+      logger: { warn() {}, info() {} },
+      dataDir,
+      configPath,
+      configView,
+      apiKeyPresent: false,
+      uiDir: join(root, 'ui-does-not-exist'),
+    },
+    {
+      memoryServiceHost: '127.0.0.1',
+      memoryServicePort: 0,
+      memoriesIdentity: 'user',
+      graphDashboardHost: '127.0.0.1',
+      graphDashboardPort: 0,
+    },
+  )
+  const placeholderBase = await placeholderService.start()
+  try {
+    assert.ok(placeholderBase)
+    const placeholderUi = placeholderService.graphUrl
+    assert.ok(placeholderUi, '端口 0 也应启动 UI（随机端口）')
+    const page = await fetch(`${placeholderUi}/`)
+    assert.equal(page.status, 200)
+    const html = await page.text()
+    assert.match(html, /<html/i)
+    assert.ok(html.includes('静态资源尚未安装'), '缺少 ui 目录时应给占位说明')
+    const missing = await fetch(`${placeholderUi}/app.js`)
+    assert.equal(missing.status, 404)
+  } finally {
+    await placeholderService.stop()
+  }
+})
+
+test('配置：graphDashboardHost/Port 运行期即时重启生效', async () => {
+  const moved = await call('/config', { method: 'PUT', body: { graphDashboardPort: 18764 } })
+  assert.equal(moved.status, 200, moved.text)
+  assert.equal(moved.json.restartRequired, false, 'graph 端口即时生效，不需要重启')
+  const configAfter = await call('/config')
+  assert.equal(configAfter.json.config.graphDashboardPort, 18764)
+
+  const newUi = await fetch('http://127.0.0.1:18764/')
+  assert.equal(newUi.status, 200)
+  await newUi.text()
+
+  const back = await call('/config', { method: 'PUT', body: { graphDashboardPort: UI_PORT } })
+  assert.equal(back.status, 200)
+  assert.equal(back.json.restartRequired, false)
+  const restored = await fetch(`${uiBase}/`)
+  assert.equal(restored.status, 200)
+  await restored.text()
+})
+
+// ---------------------------------------------------------------- §10 持久化
 
 test('插件模式兼容：deps 未传 dataDir 时回退 store.dataDir，管理写/回收站仍可用', async () => {
   // DSH 插件入口 plugin-entry.mjs 调用 createMemoryService 时只传 store/model/graph，
@@ -753,11 +896,14 @@ test('插件模式兼容：deps 未传 dataDir 时回退 store.dataDir，管理�
       graph: fakeGraph,
       profilePath: '',
       logger: { warn() {}, info() {} },
+      uiDir,
     },
     {
       memoryServiceHost: '127.0.0.1',
       memoryServicePort: 0,
       memoriesIdentity: 'user',
+      graphDashboardHost: '127.0.0.1',
+      graphDashboardPort: 0,
     },
   )
   const pluginBase = await pluginMode.start()
@@ -801,11 +947,14 @@ test('重启后回收站/审计仍在（文件持久化）', async () => {
       configPath,
       configView,
       apiKeyPresent: true,
+      uiDir,
     },
     {
       memoryServiceHost: '127.0.0.1',
       memoryServicePort: API_PORT + 1,
       memoriesIdentity: 'user',
+      graphDashboardHost: '127.0.0.1',
+      graphDashboardPort: UI_PORT + 1,
     },
   )
   const restartedBase = await restarted.start()
