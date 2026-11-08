@@ -11,6 +11,7 @@
   "files": [
     "src",
     "service",
+    "scripts/selfcheck.mjs",
     "cordis.patch.yml",
     "听雪档案.txt",
     "README.md",

@@ -53,7 +53,7 @@
 
 import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, rmSync, lstatSync, mkdtempSync, mkdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { join, resolve, dirname, basename } from 'node:path'
+import { join, resolve, dirname, basename, delimiter } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
@@ -464,14 +464,28 @@ function npmCliPath() {
  * 主校验流程**绝不调用 pnpm** —— 那是会改变环境的动作，交回使用者的手。
  */
 function pnpmCliPath() {
-  const cands = [
-    process.env.pnpm_execpath && /\.(mjs|cjs|js)$/.test(process.env.pnpm_execpath) ? process.env.pnpm_execpath : null,
-    process.env.APPDATA ? join(process.env.APPDATA, 'npm', 'node_modules', 'pnpm', 'bin', 'pnpm.mjs') : null,
-    process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'pnpm', 'pnpm.mjs') : null,
-    join(dirname(process.execPath), 'node_modules', 'pnpm', 'bin', 'pnpm.mjs'),
+  const PATH_DIRS = String(process.env.PATH ?? '').split(delimiter).filter(Boolean)
+  const bases = [
+    process.env.APPDATA ? join(process.env.APPDATA, 'npm', 'node_modules', 'pnpm', 'bin') : null,
+    process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'pnpm') : null,
+    join(dirname(process.execPath), 'node_modules', 'pnpm', 'bin'),
+    // setup-node / 系统包管理器装的 node：pnpm 落在 node 前缀的 lib 下
+    join(dirname(process.execPath), 'lib', 'node_modules', 'pnpm', 'bin'),
+    join(dirname(process.execPath), '..', 'lib', 'node_modules', 'pnpm', 'bin'),
+    // pnpm/action-setup 把可执行壳放在 PNPM_HOME，js 入口在 node_modules 里
+    process.env.PNPM_HOME ?? null,
+    process.env.PNPM_HOME ? join(process.env.PNPM_HOME, '..', 'node_modules', 'pnpm', 'bin') : null,
+    '/usr/local/lib/node_modules/pnpm/bin',
+    '/usr/lib/node_modules/pnpm/bin',
   ].filter(Boolean)
-  for (const c of cands) if (existsSync(c)) return c
-  // 退路：pnpm 在 PATH 上但入口是 .CMD（Windows）→ 交给 shell 解析
+  // 入口文件名随版本变：老版 pnpm.mjs，新版 pnpm.cjs。两个都认。
+  const NAMES = ['pnpm.cjs', 'pnpm.mjs', 'pnpm.js']
+  const cands = []
+  if (process.env.pnpm_execpath && /\.(mjs|cjs|js)$/.test(process.env.pnpm_execpath)) cands.push(process.env.pnpm_execpath)
+  for (const b of bases) for (const n of NAMES) cands.push(join(b, n))
+  // 最后扫 PATH：只收 js 入口（POSIX 上 pnpm 本体是 shell 脚本，不能直接 spawn）
+  for (const d of PATH_DIRS) for (const n of NAMES) cands.push(join(d, n))
+  for (const c of cands) if (c && existsSync(c)) return c
   return null
 }
 

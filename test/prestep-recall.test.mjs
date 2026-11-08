@@ -72,6 +72,28 @@ function mount(baseUrl) {
   return { prestep, memoryCtx, handlers, fire };
 }
 
+/** 本地假记忆服务：listen(0) 拿临时端口。
+ *  这组测试原来直接打 `http://127.0.0.1:8766`，即**本机真实记忆服务**——
+ *  服务在跑就真查库（结果条数随库里数据变），服务忙或重启就吐空串，
+ *  于是「context 没吐出记忆文本」会随机假红（2026-11-08 CI/本机都复现过）。
+ *  测试必须自带数据源，不能把线上库当夹具。 */
+async function startRecallStub(rows = null) {
+  const hits = [];
+  const results = rows ?? [
+    { id: 'stub-1', text: '用户：你还记得我的暗号吗 听雪：记得，紫色海豚-7319。', distance: 0.21, scene: 'chat', source: 'chat' },
+  ];
+  const server = createServer((req, res) => {
+    hits.push(req.url);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, results }));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  // 不 unref 的话假服务会一直吊着事件循环，整个测试进程跑完也不退（实测卡满 300s 超时）。
+  server.unref();
+  const url = `http://127.0.0.1:${server.address().port}`;
+  return { url, hits, close: () => new Promise((r) => server.close(r)) };
+}
+
 const mkPayload = (sessionId, step, cwd) => ({
   agent: { session: { id: sessionId, header: { cwd } } },
   messages: [{ role: 'user', content: [{ type: 'text', text: USER_TEXT }] }],
@@ -85,7 +107,8 @@ const results = [];
 
 // 1 + 2 + 3. 真实链路：pre-step 只缓存，context 吐文本
 {
-  const { prestep, memoryCtx } = mount('http://127.0.0.1:8766');
+  const stub = await startRecallStub();
+  const { prestep, memoryCtx } = mount(stub.url);
   const payload = mkPayload(CHAT_SESSION, 1, 'D:\\oransky\\IM_QQ_TingXue');
   // 先看 context 在没有缓存时是否为空
   assert.equal(memoryCtx.text(asAssembly(CHAT_SESSION, 'D:\\oransky\\IM_QQ_TingXue')), '', '缓存为空时 context 不应有内容');
@@ -120,7 +143,8 @@ const results = [];
 // 6. 真实 IM 形态：step=1 的 payload.messages 只有 <dsh_im_source> 元数据，
 //    用户正文只在会话 eventsSnapshot 里 —— 这条不通过，线上就等于没查记忆。
 {
-  const { prestep, memoryCtx } = mount('http://127.0.0.1:8766');
+  const stub = await startRecallStub();
+  const { prestep, memoryCtx } = mount(stub.url);
   const META = '<dsh_im_source>{"channel":"qq","conversationType":"direct"}</dsh_im_source>';
   const metaOnly = {
     agent: {
@@ -152,7 +176,8 @@ const results = [];
 //    正文根本不在里面；eventsSnapshot 只有上一轮的正文。本轮正文只在收件箱事件里。
 //    这条不通过，线上检索词就是上一轮的话（「介绍一下用户」），记忆永远慢一拍。
 {
-  const { prestep, memoryCtx, handlers, fire } = mount('http://127.0.0.1:8766');
+  const stub = await startRecallStub();
+  const { prestep, memoryCtx, handlers, fire } = mount(stub.url);
   const META = '<dsh_im_source>{"channel":"qq","conversationType":"direct"}</dsh_im_source>';
   assert.ok((handlers.get('agent/inbox/inserted') ?? []).length > 0, 'agent/inbox/inserted 钩子没注册');
   const session = {

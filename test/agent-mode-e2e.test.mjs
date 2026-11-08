@@ -183,8 +183,11 @@ test('真机路径：/agentstart → /agentstop 全流程', async () => {
   const lastFail = failMsgs[failMsgs.length - 1]
   check('推送了失败回执', !!lastFail, `${failMsgs.length} 条`)
   check(
-    '回执带真因（EPERM/具体错误），不是光一句「切换QQ绑定失败」',
-    /EPERM|operation not permitted|原因/.test(String(lastFail?.content ?? '')),
+    '回执带真因（具体错误码/诊断），不是光一句「切换QQ绑定失败」',
+    // 断言的是「真因可见」，不是某个特定 errno：注入手法不同，errno 就不同。
+    // 目录占位 → EISDIR；被占用 → EPERM/EBUSY；权限 → EACCES。原来只认 EPERM 与
+    // 字面的「原因」，于是换成目录占位（代码给出 EISDIR + 处置建议）就误报成失败。
+    /EPERM|EACCES|EISDIR|EBUSY|ENOTDIR|operation not permitted|诊断|建议|原因/.test(String(lastFail?.content ?? '')),
     String(lastFail?.content ?? '').slice(0, 100).replace(/\n/g, ' '),
   )
 
@@ -214,7 +217,16 @@ test('真机路径：/agentstart → /agentstop 全流程', async () => {
  *   本 test 含多条真实争用窗口（400ms/350ms 各一）+ 多次 12 次重试，单项已约 2.7s，
  *   慢机上会接近默认上限，故显式给 timeout。
  */
-test('写盘争用重试预算与「先绑定后建会话」（旧代码会失败）', { timeout: 60000 }, async () => {
+test('写盘争用重试预算与「先绑定后建会话」（旧代码会失败）', {
+  timeout: 60000,
+  // 整组测试靠 Windows 的独占语义造争用：另一句柄以 'r' 打开 state.json 时，
+  // rename 覆盖会抛 EPERM/EBUSY。POSIX 下 rename 覆盖被打开的文件是**合法**的，
+  // 争用窗口根本不会出现，注入不成立 → 断言必然假红（CI 在 ubuntu 上就是这么红的）。
+  // 这不是产物在 Linux 上坏了，而是这段复现手段只在 Windows 有效，故显式跳过。
+  skip: process.platform === 'win32'
+    ? false
+    : '依赖 Windows 的「打开中的文件不可被 rename 覆盖」语义；POSIX 下该争用窗口不存在',
+}, async () => {
   const results = []
   const check = (name, ok, detail = '') => {
     results.push({ name, ok, detail })

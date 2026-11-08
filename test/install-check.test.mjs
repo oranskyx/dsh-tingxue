@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, readFile, rm, readdir, stat } from 'node:fs/promises'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, dirname } from 'node:path'
+import { join, dirname, delimiter } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import {
@@ -615,11 +615,20 @@ function packFileList() {
   return meta.files.map((f) => f.path)
 }
 function findNpmCli() {
+  // node 自带 npm 的位置随安装方式而变：Windows 官方包在 <node>/node_modules/npm，
+  // Linux/CI（setup-node、发行版包）多在 <node>/lib/node_modules/npm 或 /usr/(local/)lib。
+  // 原来的两个候选在 GitHub runner 上一个都不命中，于是「找不到 npm CLI」假红。
+  const NODE = dirname(process.execPath)
   const cands = [
-    join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
-    join(dirname(process.execPath), 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    join(NODE, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    join(NODE, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    join(NODE, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    '/usr/local/lib/node_modules/npm/bin/npm-cli.js',
+    '/usr/lib/node_modules/npm/bin/npm-cli.js',
+    ...String(process.env.PATH ?? '').split(delimiter).filter(Boolean)
+      .map((d) => join(d, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')),
   ]
-  for (const c of cands) if (existsSync(c)) return c
+  for (const c of cands) { try { if (existsSync(c)) return c } catch { /* 路径非法就跳过 */ } }
   return null
 }
 
