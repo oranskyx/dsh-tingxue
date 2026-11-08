@@ -1316,8 +1316,6 @@ window.__ModuleLoader__.load({
           hasForbidden(state) ? h(Banner, { kind: 'warn' }, tr('host_forbidden', '面板接口只允许本机 loopback 访问；当前连接不是本机。')) : null,
           hasHostRouteError(state) && state.panel === null ? h(Banner, { kind: 'warn' }, tr('host_missing', 'Host 面板接口未就绪：/dsh-tingxue-ui/panel 没有响应。插件可能还没加载，或需要重启 DSH。')) : null,
           h(StatusCards, { state, tr }),
-          h(StatsCard, { state, tr }),
-          h(ApiCard, { state, online: isMemoryOnline(state), tr, reload }),
           h(SwitchCard, { section: 'companion', state, tr, reload, tierDefault: 'full' }),
           h(ContextCard, { state, tr }),
           h(PersonaCard, { state, online: isMemoryOnline(state), tr })))
@@ -1338,7 +1336,6 @@ window.__ModuleLoader__.load({
           hasForbidden(state) ? h(Banner, { kind: 'warn' }, tr('host_forbidden', '面板接口只允许本机 loopback 访问；当前连接不是本机。')) : null,
           hasHostRouteError(state) && state.panel === null ? h(Banner, { kind: 'warn' }, tr('host_missing', 'Host 面板接口未就绪：/dsh-tingxue-ui/panel 没有响应。插件可能还没加载，或需要重启 DSH。')) : null,
           h(StatusCards, { state, tr }),
-          h(ApiCard, { state, online: isMemoryOnline(state), tr, reload }),
           h(SwitchCard, {
             section: 'agent', state, tr, reload, tierDefault: 'archive',
             note: tr('agent_switch_note', '干活 bot 只召回已完结项目档案：默认档位为「仅档案」，避免把聊天上下文带进任务。'),
