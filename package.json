@@ -10,15 +10,25 @@
   },
   "files": [
     "src",
-    "service",
+    "service/memory-service.mjs",
+    "service/config.example.json",
+    "service/bin/nssm.exe",
+    "service/install-nssm.ps1",
+    "service/uninstall-nssm.ps1",
+    "service/ui/index.html",
+    "service/ui/app.js",
+    "service/ui/graph-engine.js",
+    "service/ui/styles.css",
+    "examples",
     "scripts/selfcheck.mjs",
     "cordis.patch.yml",
-    "听雪档案.txt",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "selfcheck": "node scripts/selfcheck.mjs"
+    "selfcheck": "node scripts/selfcheck.mjs",
+    "test": "node scripts/run-tests.mjs",
+    "install-check": "node scripts/install-check.mjs"
   },
   "dsh": {
     "bundle": {

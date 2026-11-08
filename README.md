@@ -53,7 +53,7 @@
 |---|---|---|
 | **Node.js** | `>= 22.19` | 见 `package.json` 的 `engines` |
 | **DeepSeek Harness** | `0.1.1-rc.2` 或更高 | 插件运行宿主 |
-| **dsh-notifier** | **`0.9.0` + 补丁** | QQ 通道。⚠️ **必须钉死 `0.9.0` 并打补丁**，不是普通的 `^0.9.0`（见 [安装](#安装) 与 `发布形态与安装流程.md` §4） |
+| **@xmanrui/dsh-im** | `>= 5.0.3` | QQ 通道（收发消息全交给它，本插件只做人格装配与记忆）。见 `package.json` 的 `peerDependencies` |
 | **pnpm** | 任意近期版本 | 安装 `@lancedb/lancedb` 时需要解析原生依赖 |
 | **一个 LLM / embedding 端点** | — | 默认走 sta1n 供应商，也可切换本地 OpenAI 兼容端点 |
 
@@ -64,34 +64,27 @@
 ## 安装
 
 > [!IMPORTANT]
-> **先装 `dsh-notifier`，并把它钉在 `0.9.0` + 打上补丁**（见下方第 2 步）。这不是可选项——不打补丁，**QQ 收文件功能整个不存在**（DSH 侧靠补丁拼出的 `[文件] 名称\n下载地址: url` 标记来下载文件），且超 2000 字会被硬切半句。原因与替代方案见 `发布形态与安装流程.md` §4。
+> 只需要一个 peer 依赖：**`@xmanrui/dsh-im >= 5.0.3`**（QQ 收发通道）。
+> 本插件**不再依赖 `dsh-notifier`**，也不需要打任何补丁 —— 早期版本要求装 `dsh-notifier@0.9.0`
+> 再手工打 `patches/dsh-notifier.patch`，那条路已经废弃（补丁文件从未随仓库发布，照旧文档走会卡住）。
+> 如果你的 DSH 里仍装着 `dsh-notifier`，绑定键会按 `$DSH_HOME/dsh-notifier/state.json` 自动兼容读取，不用管它。
 
 ```sh
-# 1) 在 DSH profile 目录安装本插件
-#    Windows 默认路径：%USERPROFILE%\.dsh\profiles\web
-cd ~/.dsh/profiles/web
-pnpm add file:/absolute/path/to/dsh-tingxue
+# 1) 先确认你的 profile 目录（不同 DSH 版本默认名不同：web / desktop …）
+#    —— 有 package.json 的那个就是：
+ls ~/.dsh/profiles/*/package.json
 
-# 2) 把 dsh-tingxue 加入 profile 的 package.json
+# 2) 在 profile 目录里装本插件（把 <本仓库路径> 换成你 clone 的位置）
+cd ~/.dsh/profiles/<你的 profile>
+pnpm add file:<本仓库路径>
+pnpm add @xmanrui/dsh-im            # peer 依赖：QQ 通道
+
+# 3) 把 dsh-tingxue 加进 profile 的 package.json（漏了会得到
+#    「已安装，未生效：未声明 dsh.bundle，已作为普通依赖安装」）
 #    "dsh": { "profile": { "bundles": [ ..., "dsh-tingxue" ] } }
-#    —— 漏这一步会得到「已安装，未生效：未声明 dsh.bundle，已作为普通依赖安装」
 
-# 3) 重启 DSH 让插件挂载
+# 4) 重启 DSH 让插件挂载
 ```
-
-**前置的 `dsh-notifier`（必须先做）**：
-
-```sh
-cd ~/.dsh/profiles/web
-pnpm add dsh-notifier@0.9.0          # 必须钉 0.9.0，补丁的行号基于此版本
-
-# 把补丁放进 profiles/web/patches/，然后在 pnpm-workspace.yaml 里接线：
-#   patchedDependencies:
-#     dsh-notifier: patches/dsh-notifier.patch
-pnpm install                          # 让补丁生效
-```
-
-补丁生效的验证：`node_modules/dsh-notifier/src/inbound/_qq-segment.mjs` 存在，且 `src/inbound/message.mjs` 里能搜到 `parseQQFileAttachments`。
 
 > [!IMPORTANT]
 > DSH 插件的源码是**进程启动时加载、不热重载**的。改完源码必须两步走：**① 同步到 profile 的 `node_modules` 副本 → ② 重启 DSH**。
@@ -114,10 +107,8 @@ node <插件仓库>/scripts/install-check.mjs --json    # 机器可读
 |---|---|
 | **C1** 插件声明了 `dsh.bundle`，且有 `files` 白名单 | profile 会把它当普通依赖装 |
 | **C2** 插件在 `dsh.profile.bundles` 名单里 | 正是那句「已安装，未生效：未声明 `dsh.bundle`」 |
-| **C3** `dsh-notifier` **钉死 `0.9.0`**（不是 `^0.9.0`）；已装版本也是 0.9.0 | 补丁带**行号 hunk**，升级后 `pnpm install` 直接失败。有 `pnpm-lock.yaml` 时本机今天不会立刻炸，但换机器 / 删 lock / `pnpm update` 会 |
-| **C4** 补丁接线在 `pnpm-workspace.yaml` 的 `patchedDependencies`（**不在** profile 的 `package.json` 里） | 补丁文件躺在磁盘上也不会被应用 |
-| **C4-applied** 补丁**真的生效了**（`_qq-segment.mjs` 在 + `message.mjs` 含 `parseQQFileAttachments`） | QQ 收文件功能整个不存在；接完必须再 `pnpm install` |
-| **C5** 运行副本 `node_modules/dsh-tingxue` 与仓库的 `src/` `client/` 补丁层**逐字节一致** | profile 用 `file:` + `nodeLinker: hoisted`，运行副本是**真实目录拷贝不是 junction** → 改仓库不生效（本项目最隐蔽的失效模式） |
+| **C3** / **C4** | **已退役**：本插件不再依赖 `dsh-notifier`，也不需要任何补丁（QQ 通道由 `@xmanrui/dsh-im` 提供）。自检只在 profile 里还留着旧接线时给一条迁移提示 |
+| **C5** 运行副本 `node_modules/dsh-tingxue` 与仓库的 `src/` 补丁层**逐字节一致**（**link 安装下不适用**，会明确标「无需比对」而不是给假绿灯） | profile 用 `file:` + `nodeLinker: hoisted` 时，运行副本是**真实目录拷贝不是 junction** → 改仓库不生效（本项目最隐蔽的失效模式） |
 | **C6** 仓库里没有活配置的凭据明文（扫全部跟踪文件），工作区干净 | 凭据进仓库 |
 | **C7** 活 profile 里的明文凭据被识别出来 | 真实风险面其实在仓库外（见 `SECURITY.md`） |
 | **C8** `npm pack --dry-run` 清单无泄漏 | `.gitignore` **拦不住 npm 打包**，`files` 白名单才是权威 |
@@ -236,7 +227,10 @@ Host 与浏览器两个半侧各有一份同构的字段表（`src/settings/inde
 
 - 标了 `applies: 'restart'` 的命名空间：`dataDir`、模型、端口这类**启动期读取**的字段，改动**需重启 DSH**。
 - `recentRounds`、`injectRecentRounds`、记忆 / 最新信息预算这类**按次读取**的字段，保存后立即生效。
-- `qqStatusNotice` / `approvalAllowlistOnly` 保存后**立即生效**：它们被写成 dsh-notifier 的 `prefs:tingxue` 状态键，由 dsh-notifier 补丁在每次推送 / 审批时实时读取（500ms 读收敛）。
+- `qqStatusNotice` / `approvalAllowlistOnly` 保存后**立即生效**：它们被写成 `prefs:tingxue` 状态键，由通道层在每次推送 / 审批时实时读取（500ms 读收敛）。
+> [!NOTE]
+> 本文档里凡是提到 `dsh-notifier` 的地方（配置项 `channel` / `userId` / `notifierStateFile`、状态键 `prefs:tingxue`、绑定读取路径等），
+> 都是**早期通道的历史命名**：通道已换成 `@xmanrui/dsh-im`，这些字段名与状态键为了兼容旧数据保留不变，照填即可。
 - `graphDashboardEnable` / `memoryServiceEnable` 等开关由插件启动期读取，**需重启 DSH**。
 
 ---

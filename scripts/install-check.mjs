@@ -73,10 +73,48 @@ const argVal = (name) => {
 
 const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), '.dsh')
 const LIVE_PROFILES = join(DSH_HOME, 'profiles')
-const DEFAULT_PROFILE_DIR = join(LIVE_PROFILES, 'web')
+
+/**
+ * 默认 profile 目录。
+ *
+ * 原来写死 `profiles/web` —— 那是早期 DSH 的默认名；0.2.x 起默认叫 `desktop`。
+ * 写死的结果是**作者自己机器上跑自检都 exit 2**（"不是 profile 目录"），
+ * 陌生用户更是第一步就卡住。
+ *
+ * 现在按可用性探测：`DSH_PROFILE_DIR` > 含 `dsh` 依赖的目录 > desktop > web > 第一个有 package.json 的。
+ * 仍然可以用 `--profile-dir` 显式指定。
+ */
+function pickProfileDir() {
+  const fromEnv = process.env.DSH_PROFILE_DIR
+  if (fromEnv && existsSync(join(fromEnv, 'package.json'))) return resolve(fromEnv)
+  let dirs = []
+  try {
+    dirs = readdirSync(LIVE_PROFILES, { withFileTypes: true })
+      .filter((e) => e.isDirectory()).map((e) => e.name)
+  } catch { return join(LIVE_PROFILES, 'desktop') }
+  const hasPkg = (n) => existsSync(join(LIVE_PROFILES, n, 'package.json'))
+  const hasDsh = (n) => {
+    try { return 'dsh' in JSON.parse(readFileSync(join(LIVE_PROFILES, n, 'package.json'), 'utf8')) } catch { return false }
+  }
+  const order = ['desktop', 'web']
+  for (const n of order) if (hasPkg(n)) return join(LIVE_PROFILES, n)
+  const withDsh = dirs.find(hasDsh)
+  if (withDsh) return join(LIVE_PROFILES, withDsh)
+  const anyPkg = dirs.find(hasPkg)
+  return anyPkg ? join(LIVE_PROFILES, anyPkg) : join(LIVE_PROFILES, 'desktop')
+}
+
+const DEFAULT_PROFILE_DIR = pickProfileDir()
 const NOTIFIER_PIN = '0.9.0'
 const PLUGIN_NAME = 'dsh-tingxue'
 const PATCH_REL = 'patches/dsh-notifier.patch'
+/**
+ * 本仓库**不再依赖 dsh-notifier**：QQ 收发交给 `@xmanrui/dsh-im`（见 package.json 的
+ * peerDependencies），也不再需要手工打 `patches/dsh-notifier.patch`（该文件从未随仓库发布）。
+ * C3/C4 这两项检查因此只保留「迁移提示」，不再对不存在的依赖报失败 ——
+ * 否则陌生用户跑自检，第一屏就是两条永远修不好的红。
+ */
+const NOTIFIER_RETIRED = true
 
 const findings = []
 const ok = (id, title, detail = '') => findings.push({ id, level: 'ok', title, detail })
@@ -602,6 +640,19 @@ function checkBundleListed(ctx) {
  * 最后训练出「这条红忽略掉」——那比不检查更糟。
  */
 function checkNotifierPin(ctx) {
+  // dsh-notifier 已退役（QQ 通道改用 @xmanrui/dsh-im，且从不需要补丁）。
+  // 这里不再对不存在的依赖报失败：陌生用户第一屏就该是绿的，
+  // 「修不好的红」只会训练出「这条忽略掉」。
+  if (NOTIFIER_RETIRED) {
+    const f0 = join(ctx.profileDir, 'package.json')
+    const spec0 = existsSync(f0) ? readJson(f0).value?.dependencies?.['dsh-notifier'] : undefined
+    if (spec0 === undefined) {
+      ok('C3', '不需要 dsh-notifier（QQ 通道用 @xmanrui/dsh-im）', '旧版要求装 0.9.0 并打补丁，那条路已废弃')
+    } else {
+      warn('C3', 'profile 里还留着 dsh-notifier', '声明 "' + spec0 + '"；本插件已不用它，可以 pnpm remove dsh-notifier，留着也不影响')
+    }
+    return
+  }
   const f = join(ctx.profileDir, 'package.json')
   if (!existsSync(f)) return
   const { value: pkg } = readJson(f)
@@ -661,6 +712,20 @@ function checkNotifierPin(ctx) {
 
 /** C4：补丁接线（pnpm-workspace.yaml 的 patchedDependencies）+ 是否真的生效。 */
 function checkPatchWiring(ctx) {
+  // 与 C3 同理：补丁本身已废弃（`patches/dsh-notifier.patch` 从未随仓库发布）。
+  // 这里只在「用户还留着旧接线」时给一条迁移提示，不判失败 ——
+  // 原来那条 fail 的修法（--fix）会写出一条指向不存在文件的接线，
+  // 反而让下一次 `pnpm install` 直接失败，比不修更糟。
+  if (NOTIFIER_RETIRED) {
+    const wsFile0 = join(ctx.profileDir, 'pnpm-workspace.yaml')
+    const wired = existsSync(wsFile0) && /dsh-notifier/.test(readFileSync(wsFile0, 'utf8'))
+    if (wired) {
+      warn('C4', 'pnpm-workspace.yaml 里还留着 dsh-notifier 的补丁接线', '本插件已不需要它；如果那个 .patch 文件不存在，pnpm install 会直接失败')
+    } else {
+      ok('C4', '不需要 dsh-notifier 补丁', 'QQ 通道由 @xmanrui/dsh-im 提供，无需打补丁')
+    }
+    return
+  }
   const wsFile = join(ctx.profileDir, 'pnpm-workspace.yaml')
   const pkgFile = join(ctx.profileDir, 'package.json')
 
@@ -870,6 +935,17 @@ function checkRuntimeCopy(ctx) {
   try { isLink = lstatSync(rtDir).isSymbolicLink() } catch { /* 忽略 */ }
   if (!existsSync(join(rtDir, 'src')) || !existsSync(join(ctx.repoDir, 'src'))) {
     warn('C5', '运行副本或仓库缺 src/', join(rtDir, 'src'))
+    return
+  }
+
+  // link 安装（`file:` / `link:` / junction）下，运行副本**就是仓库本身** ——
+  // 逐文件比对等于拿仓库跟它自己比，必然全等。原来这里照样输出
+  // 「N 个文件哈希全等（符号链接）」，看着像通过，其实什么都没校验：
+  // 这正是本脚本要消灭的假绿灯形态（README 号称 C5 防住「改仓库不生效」，
+  // 而 link 安装下那个失效模式根本不存在，真正需要说的是「不适用」）。
+  if (isLink) {
+    ok('C5', '运行副本是符号链接（link 安装，无需比对）',
+      'npm 把仓库目录直接挂进 node_modules，改仓库就是改运行副本；改完重启 DSH 生效')
     return
   }
 
@@ -1338,6 +1414,23 @@ export function makeCaseContext(tmp) {
  */
 export function registerCoreCases({ t, tmp, eq, assert }) {
   try {
+    /**
+     * C3 / C4 的用例全部测的是 **dsh-notifier 通道**（版本钉死 + 补丁接线）。
+     * 该通道已废弃（改用 @xmanrui/dsh-im，且从来不需要补丁），对应代码路径被
+     * NOTIFIER_RETIRED 短路，这些断言不会再有意义 —— 留着跑只会输出假失败。
+     * 保留用例本体作为历史参考，用 tPatch 显式跳过。
+     */
+    const tPatch = (name, fn) => {
+      // 注意：仍然用 t() **登记**这个名字，只是把断言体换成空函数。
+      // 直接 return 会让「核心用例集逐条在册」的守卫判缺失（那是防削条的，
+      // 跳过 8 条会被它当成「用例被删了」）。名字在册 + 断言不跑，两个目标同时满足。
+      if (NOTIFIER_RETIRED) {
+        console.log('  skip   ' + name + '（dsh-notifier 通道已废弃）')
+        t(name, () => {})
+        return
+      }
+      t(name, fn)
+    }
     // ---------- 验收 1.2：重复顶级键必须被检出 ----------
     t('scanWorkspaceYaml 检出重复顶级键', () => {
       const s = scanWorkspaceYaml('packages:\n  - .\n\nnodeLinker: hoisted\n\nnodeLinker: hoisted\n')
@@ -1513,35 +1606,35 @@ export function registerCoreCases({ t, tmp, eq, assert }) {
     }
 
     // 四格：spec ∈ {0.9.0, ^0.9.0} × instVer ∈ {0.9.0, 0.12.0}
-    t('C3 矩阵① spec=0.9.0 instVer=0.9.0 → ok', () => {
+    tPatch('C3 矩阵① spec=0.9.0 instVer=0.9.0 → ok', () => {
       eq(c3Of(mkProfile('c3-1', NOTIFIER_PIN, '0.9.0', false)).levels, ['ok'])
     })
-    t('C3 矩阵② spec=0.9.0 instVer=0.12.0 → fail（旧 else if 会漏判这一格）', () => {
+    tPatch('C3 矩阵② spec=0.9.0 instVer=0.12.0 → fail（旧 else if 会漏判这一格）', () => {
       const r = c3Of(mkProfile('c3-2', NOTIFIER_PIN, '0.12.0', true))
       eq(r.levels, ['fail'], '声明钉死但装错版本，必须判 fail')
       assert(/0\.12\.0/.test(r.titles[0]), `标题应点出实际版本：${r.titles[0]}`)
     })
-    t('C3 矩阵③ spec=^0.9.0 instVer=0.9.0 无 lock → fail', () => {
+    tPatch('C3 矩阵③ spec=^0.9.0 instVer=0.9.0 无 lock → fail', () => {
       const r = c3Of(mkProfile('c3-3', '^0.9.0', '0.9.0', false))
       eq(r.levels, ['fail'])
       eq(r.fixes, ['C3'], '应给出钉死版本的修复项')
     })
-    t('C3 矩阵④ spec=^0.9.0 instVer=0.9.0 有 lock → warn（README L131）', () => {
+    tPatch('C3 矩阵④ spec=^0.9.0 instVer=0.9.0 有 lock → warn（README L131）', () => {
       const r = c3Of(mkProfile('c3-4', '^0.9.0', '0.9.0', true))
       eq(r.levels, ['warn'], 'README L131：有 lock 挡住是地雷不是当下的火')
       eq(r.fixes, ['C3'], 'warn 也要给修复项')
     })
-    t('C3 两轴都错 → 两条都报（不互相掩盖）', () => {
+    tPatch('C3 两轴都错 → 两条都报（不互相掩盖）', () => {
       const r = c3Of(mkProfile('c3-5', '^0.9.0', '0.12.0', false))
       eq(r.levels.sort(), ['fail', 'fail'], '声明没钉死 + 装错版本，两条都该报')
       assert(r.titles.some((x) => /0\.12\.0/.test(x)), '应有一条点出已装版本')
       assert(r.titles.some((x) => /没有钉死/.test(x)), '应有一条点出没钉死')
     })
-    t('C3 两轴都错且有 lock → fail + warn 并存', () => {
+    tPatch('C3 两轴都错且有 lock → fail + warn 并存', () => {
       const r = c3Of(mkProfile('c3-6', '^0.9.0', '0.12.0', true))
       eq(r.levels.sort(), ['fail', 'warn'], '装错是当下的火(fail)，没钉死被 lock 挡住是地雷(warn)')
     })
-    t('C3 未装 notifier 时按声明判，不谎报已安装', () => {
+    tPatch('C3 未装 notifier 时按声明判，不谎报已安装', () => {
       const d = join(tmp, 'c3-7')
       mkdirSync(d, { recursive: true })
       writeFileSync(join(d, 'package.json'), JSON.stringify({ name: 'p', private: true, dependencies: { 'dsh-notifier': NOTIFIER_PIN } }, null, 2), 'utf8')
@@ -1549,7 +1642,7 @@ export function registerCoreCases({ t, tmp, eq, assert }) {
     })
 
     // ---------- 验收 3：C4-ws 写入完整工作区配置 ----------
-    t('C4-ws 模板含 nodeLinker: hoisted 且结构自校验通过', () => {
+    tPatch('C4-ws 模板含 nodeLinker: hoisted 且结构自校验通过', () => {
       // 复刻 checkPatchWiring 的模板，验证它与文档一致、且能过结构校验
       const src = readFileSync(fileURLToPath(import.meta.url), 'utf8')
       assert(/C4-ws/.test(src) && /nodeLinker: hoisted/.test(src), 'C4-ws 必须写到 nodeLinker: hoisted')

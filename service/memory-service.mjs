@@ -85,9 +85,15 @@ const configPath = process.env.TINGXUE_SERVICE_CONFIG
   ? resolve(process.env.TINGXUE_SERVICE_CONFIG)
   : join(here, 'config.json')
 const fileConfig = await readJson(configPath)
+// 空串 = 「没配」：config.example.json 里刻意把 dataDir / profilePath / credentialsPath
+// 留成 ""，表示「用推导出来的默认值」。不清理的话空串会覆盖默认值 ——
+// dataDir 变成 resolve('') = 当前工作目录，等于把库建在启动时的 cwd 下。
+const fileConfigSet = Object.fromEntries(
+  Object.entries(fileConfig ?? {}).filter(([, v]) => v !== '' && v !== null && v !== undefined),
+)
 const config = {
   ...DEFAULTS,
-  ...fileConfig,
+  ...fileConfigSet,
   ...(process.env.TINGXUE_DATA_DIR ? { dataDir: process.env.TINGXUE_DATA_DIR } : {}),
   ...(process.env.TINGXUE_PROFILE_PATH ? { profilePath: process.env.TINGXUE_PROFILE_PATH } : {}),
   ...(process.env.TINGXUE_MEMORY_HOST ? { memoryServiceHost: process.env.TINGXUE_MEMORY_HOST } : {}),

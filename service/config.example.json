@@ -1,6 +1,15 @@
 {
-  "dataDir": "D:\\\\path\\\\to\\\\.dsh-tingxue-data",
-  "profilePath": "D:\\\\path\\\\to\\\\听雪档案.txt",
+  "_readme": [
+    "这是模板，不是可用配置。复制成 service/config.json 后再按需修改（config.json 已被 .gitignore 排除，不进 git 也不进 npm 包）。",
+    "所有字段都可以删掉——删掉即用内置默认值；默认值全部按「本文件所在目录」推导，不依赖任何本机绝对路径。",
+    "dataDir 留空字符串 = <仓库上一级>/.dsh-tingxue-data；profilePath 留空 = <仓库根>/听雪档案.txt。",
+    "modelBackend 合法值：sta1n | local | custom（见 src/models/index.mjs）。用 sta1n 必须先在 DSH 凭据里配好 STA1N_API_KEY；",
+    "  或用 local/custom 指向任意 OpenAI 兼容端点，并填 embeddingModel / embeddingDimensions / llmModel。",
+    "credentialsPath 留空 = ~/.dsh/.credentials.yaml（用 homedir() 推导，不要写死盘符）。",
+    "注意 JSON 里的 Windows 路径要写成双反斜杠：\"D:\\\\my\\\\dir\\\\profile.txt\"。"
+  ],
+  "dataDir": "",
+  "profilePath": "",
   "memoryServiceHost": "127.0.0.1",
   "memoryServicePort": 8766,
   "graphDashboardHost": "127.0.0.1",
@@ -10,5 +19,5 @@
   "embeddingModel": "gemini-embedding-2",
   "embeddingDimensions": 3072,
   "llmModel": "gemini-3.1-flash-lite",
-  "credentialsPath": "C:\\\\Users\\\\<you>\\\\.dsh\\\\.credentials.yaml"
+  "credentialsPath": ""
 }

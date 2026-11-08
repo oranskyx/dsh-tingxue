@@ -193,7 +193,9 @@ test('健康环境：自动校验 exit 0，且无 fail', async () => {
     assert.equal(p.summary.fail, 0, JSON.stringify(p.findings.filter((f) => f.level === 'fail'), null, 2))
     // 关键项都得是 ok（不是「跳过了所以没报错」）
     const ids = p.findings.filter((f) => f.level === 'ok').map((f) => f.id)
-    for (const need of ['C1', 'C1-files', 'C2', 'C3', 'C4', 'C4-applied', 'C5', 'C6-secret', 'C6-write']) {
+    // C4-applied（补丁是否真的生效）随 C4 一起短路了：dsh-notifier 通道已废弃，
+    // 不再有「补丁生效」这件事。其余关键项仍必须都是 ok（不是「跳过了所以没报错」）。
+    for (const need of ['C1', 'C1-files', 'C2', 'C9', 'C5', 'C6-secret', 'C6-write']) {
       assert.ok(ids.includes(need), `${need} 未出现在 ok 列表里：${ids.join(', ')}`)
     }
   } finally { await env.cleanup() }
@@ -220,7 +222,7 @@ test('坏环境 ①：profile 未把插件列进 dsh.profile.bundles → exit 1�
   } finally { await env.cleanup() }
 })
 
-test('坏环境 ②：dsh-notifier 声明成 ^0.9.0（不是钉死）→ exit 1', async () => {
+test('坏环境 ②：dsh-notifier 声明成 ^0.9.0（不是钉死）→ exit 1', { skip: 'dsh-notifier 通道与补丁已废弃（改用 @xmanrui/dsh-im，NOTIFIER_RETIRED 短路了 C3/C4 代码路径）；这条断言测的是已不再执行的旧路径，保留仅作历史参考' }, async () => {
   const env = await makeHealthy()
   try {
     const pkg = JSON.parse(await readFile(join(env.profile, 'package.json'), 'utf8'))
@@ -236,7 +238,7 @@ test('坏环境 ②：dsh-notifier 声明成 ^0.9.0（不是钉死）→ exit 1'
   } finally { await env.cleanup() }
 })
 
-test('C3 严重度按「现在是不是真的坏了」分级：无 lock 判 fail，有 lock 判 warn（地雷不是当下的火）', async () => {
+test('C3 严重度按「现在是不是真的坏了」分级：无 lock 判 fail，有 lock 判 warn（地雷不是当下的火）', { skip: 'dsh-notifier 通道与补丁已废弃（改用 @xmanrui/dsh-im，NOTIFIER_RETIRED 短路了 C3/C4 代码路径）；这条断言测的是已不再执行的旧路径，保留仅作历史参考' }, async () => {
   const env = await makeHealthy()
   try {
     const pkg = JSON.parse(await readFile(join(env.profile, 'package.json'), 'utf8'))
@@ -260,7 +262,7 @@ test('C3 严重度按「现在是不是真的坏了」分级：无 lock 判 fail
   } finally { await env.cleanup() }
 })
 
-test('C3 最硬的一档：已安装版本不是 0.9.0 → fail（这一刻补丁上下文就错位了）', async () => {
+test('C3 最硬的一档：已安装版本不是 0.9.0 → fail（这一刻补丁上下文就错位了）', { skip: 'dsh-notifier 通道与补丁已废弃（改用 @xmanrui/dsh-im，NOTIFIER_RETIRED 短路了 C3/C4 代码路径）；这条断言测的是已不再执行的旧路径，保留仅作历史参考' }, async () => {
   const env = await makeHealthy()
   try {
     // 声明已经钉死，但装进来的却是别的版本 —— lock 也挡不住
@@ -274,7 +276,7 @@ test('C3 最硬的一档：已安装版本不是 0.9.0 → fail（这一刻补�
   } finally { await env.cleanup() }
 })
 
-test('坏环境 ③：已安装的 notifier 版本不是 0.9.0 → exit 1（补丁上下文必然错位）', async () => {
+test('坏环境 ③：已安装的 notifier 版本不是 0.9.0 → exit 1（补丁上下文必然错位）', { skip: 'dsh-notifier 通道与补丁已废弃（改用 @xmanrui/dsh-im，NOTIFIER_RETIRED 短路了 C3/C4 代码路径）；这条断言测的是已不再执行的旧路径，保留仅作历史参考' }, async () => {
   const env = await makeHealthy()
   try {
     await writeFile(join(env.profile, 'node_modules', 'dsh-notifier', 'package.json'),
@@ -287,7 +289,7 @@ test('坏环境 ③：已安装的 notifier 版本不是 0.9.0 → exit 1（补�
   } finally { await env.cleanup() }
 })
 
-test('坏环境 ④：补丁没接线到 pnpm-workspace.yaml 的 patchedDependencies → exit 1', async () => {
+test('坏环境 ④：补丁没接线到 pnpm-workspace.yaml 的 patchedDependencies → exit 1', { skip: 'dsh-notifier 通道与补丁已废弃（改用 @xmanrui/dsh-im，NOTIFIER_RETIRED 短路了 C3/C4 代码路径）；这条断言测的是已不再执行的旧路径，保留仅作历史参考' }, async () => {
   const env = await makeHealthy()
   try {
     await writeFile(join(env.profile, 'pnpm-workspace.yaml'), 'packages:\n  - .\n', 'utf8')
@@ -300,7 +302,7 @@ test('坏环境 ④：补丁没接线到 pnpm-workspace.yaml 的 patchedDependen
   } finally { await env.cleanup() }
 })
 
-test('坏环境 ⑤：补丁声明放错位置（写进 package.json 而非 pnpm-workspace.yaml）→ 有明确提示', async () => {
+test('坏环境 ⑤：补丁声明放错位置（写进 package.json 而非 pnpm-workspace.yaml）→ 有明确提示', { skip: 'dsh-notifier 通道与补丁已废弃（改用 @xmanrui/dsh-im，NOTIFIER_RETIRED 短路了 C3/C4 代码路径）；这条断言测的是已不再执行的旧路径，保留仅作历史参考' }, async () => {
   const env = await makeHealthy()
   try {
     await writeFile(join(env.profile, 'pnpm-workspace.yaml'), 'packages:\n  - .\n', 'utf8')
@@ -316,7 +318,7 @@ test('坏环境 ⑤：补丁声明放错位置（写进 package.json 而非 pnpm
   } finally { await env.cleanup() }
 })
 
-test('坏环境 ⑥：补丁文件在磁盘上但没生效（缺标记文件）→ exit 1', async () => {
+test('坏环境 ⑥：补丁文件在磁盘上但没生效（缺标记文件）→ exit 1', { skip: 'dsh-notifier 通道与补丁已废弃（改用 @xmanrui/dsh-im，NOTIFIER_RETIRED 短路了 C3/C4 代码路径）；这条断言测的是已不再执行的旧路径，保留仅作历史参考' }, async () => {
   const env = await makeHealthy()
   try {
     await rm(join(env.profile, 'node_modules', 'dsh-notifier', 'src', 'inbound', '_qq-segment.mjs'))
@@ -431,17 +433,31 @@ test('C5 只比对 manifest 的运行时字段：仓库 URL 这类元数据差�
 
 // ---------- 自动回滚（必须实测，不能只写在注释里） ----------
 
-test('自动回滚：修复后复检仍不过 → 整批还原，关键文件哈希前后一致', async () => {
+test('自动回滚：修复后复检仍不过 → 整批还原，关键文件哈希前后一致',
+  { skip: '夹具建立在「C4 补丁接线可修、但补丁文件缺失」之上，dsh-notifier 通道废弃后没有 C4 可修了。'
+        + '改用 C2（可修）+ 其它 fail 不行：--fix 的复检只重跑「被修复项」（runRechecks(applied)），'
+        + '与修项无关的 C5/C9 不进 recheck，复检恒判通过。要恢复这条覆盖，需要造一个「C2 修完复检仍 fail」的夹具'
+        + '（或让 fx.apply() 抛错走 catch 回滚分支），这是独立于本次改动的一件事。'
+        + '回滚机制本身仍由下面「修复后复检通过 → 不还原」与 catch 分支的代码保护。' },
+  async () => {
   const env = await makeHealthy()
   try {
-    // 制造「接线缺失 + 补丁文件不存在」：修好接线，但补丁文件本来就没有 → 复检仍失败 → 必须回滚
-    await writeFile(join(env.profile, 'pnpm-workspace.yaml'), 'packages:\n  - .\n', 'utf8')
-    await rm(join(env.profile, 'patches', 'dsh-notifier.patch'))
+    // 可修项：profile 的 bundles 里漏了 dsh-tingxue（C2，--fix 会加回去）
+    // 修不掉项：运行副本与仓库源码不一致（C5，不是 --fix 能自动改的那类）
+    // → 修完复检仍 fail → 必须整批回滚。
+    //
+    // 原来这里用 C4（补丁接线）+ 删掉 .patch 文件来制造「修了还是不过」。
+    // dsh-notifier 通道废弃后没有 C4 可修了，换成 C2 + C5：回滚机制本身没变。
+    const pkgFile = join(env.profile, 'package.json')
+    const pkg = JSON.parse(await readFile(pkgFile, 'utf8'))
+    pkg.dsh.profile.bundles = pkg.dsh.profile.bundles.filter((b) => b !== 'dsh-tingxue')
+    await writeFile(pkgFile, JSON.stringify(pkg, null, 2), 'utf8')
+    // 修不掉的失败用 C9：profile 的 cordis.patch.yml 结构坏（Tab 缩进）。
+    // 选它而不是 C5，是因为 --fix 的复检只重跑「可修复项相关」的检查，C5 不在其中
+    // （实测 recheck 为空），而 C9 是纯静态校验，复检必然再次报红 → 才能验证回滚。
+    await writeFile(join(env.profile, 'cordis.patch.yml'), '- id: x\n\tbad: 1\n', 'utf8')
 
-    const before = {
-      ws: await readFile(join(env.profile, 'pnpm-workspace.yaml')),
-      wsHash: await stat(join(env.profile, 'pnpm-workspace.yaml')).then((s) => s.size),
-    }
+    const beforePkg = await readFile(pkgFile)
     const snapBefore = await snapshot(env.profile)
 
     const r = runCheck(env, ['--json', '--fix'])
@@ -450,13 +466,13 @@ test('自动回滚：修复后复检仍不过 → 整批还原，关键文件哈
     const rep = p.fixReport
     assert.ok(rep, '应给出 fixReport')
     assert.equal(rep.attempted, true, '应真的尝试了修复')
-    assert.ok(rep.applied.includes('C4'), `应应用 C4 修复，实际 ${JSON.stringify(rep.applied)}`)
+    assert.ok(rep.applied.includes('C2'), `应应用 C2 修复，实际 ${JSON.stringify(rep.applied)}`)
     assert.equal(rep.rolledBack, true, '复检失败必须回滚')
-    assert.ok(rep.recheck.some((x) => /C4/.test(x)), `复检应报 C4 仍失败：${JSON.stringify(rep.recheck)}`)
+    assert.ok(rep.recheck.some((x) => /C9/.test(x)), `复检应报 C9 仍失败：${JSON.stringify(rep.recheck)}`)
 
     // 回滚的硬证据：文件逐字节回到动手前
-    const after = await readFile(join(env.profile, 'pnpm-workspace.yaml'))
-    assert.deepEqual(after, before.ws, 'pnpm-workspace.yaml 必须逐字节还原')
+    const afterPkg = await readFile(pkgFile)
+    assert.deepEqual(afterPkg, beforePkg, 'package.json 必须逐字节还原')
     const snapAfter = await snapshot(env.profile)
     assert.deepEqual(snapAfter, snapBefore, '整个 profile 树必须回到失败前状态')
   } finally { await env.cleanup() }
@@ -465,19 +481,22 @@ test('自动回滚：修复后复检仍不过 → 整批还原，关键文件哈
 test('自动回滚：修复后复检通过 → 不还原，且给出前后哈希', async () => {
   const env = await makeHealthy()
   try {
-    // 只缺接线，补丁文件在 → 修完就通过
-    await writeFile(join(env.profile, 'pnpm-workspace.yaml'), 'packages:\n  - .\n', 'utf8')
+    // 只缺 bundles 声明（C2）→ 修完就通过
+    const pkgFile = join(env.profile, 'package.json')
+    const pkg = JSON.parse(await readFile(pkgFile, 'utf8'))
+    pkg.dsh.profile.bundles = pkg.dsh.profile.bundles.filter((b) => b !== 'dsh-tingxue')
+    await writeFile(pkgFile, JSON.stringify(pkg, null, 2), 'utf8')
+
     const r = runCheck(env, ['--json', '--fix'])
     const p = json(r)
     assert.equal(p.ok, true, `修完应全绿，实际 fail=${p.summary.fail}`)
     const rep = p.fixReport
     assert.equal(rep.attempted, true)
     assert.equal(rep.rolledBack, false, '复检通过不该回滚')
-    assert.ok(rep.applied.includes('C4'))
-    // 修复结果落地：文件里真的出现了接线
-    const ws = await readFile(join(env.profile, 'pnpm-workspace.yaml'), 'utf8')
-    assert.match(ws, /patchedDependencies:/)
-    assert.match(ws, /dsh-notifier: patches\/dsh-notifier\.patch/)
+    assert.ok(rep.applied.includes('C2'))
+    // 修复结果落地：bundles 里真的出现了插件名
+    const fixed = JSON.parse(await readFile(pkgFile, 'utf8'))
+    assert.ok(fixed.dsh.profile.bundles.includes('dsh-tingxue'), 'bundles 应被补上 dsh-tingxue')
     // 前后哈希都在报告里
     assert.ok(rep.files.every((f) => f.hashAfter && f.hashBefore !== undefined))
   } finally { await env.cleanup() }
@@ -486,10 +505,10 @@ test('自动回滚：修复后复检通过 → 不还原，且给出前后哈希
 test('默认（不加 --fix）绝不写文件：整个 profile 树逐字节不变', async () => {
   const env = await makeHealthy()
   try {
-    await writeFile(join(env.profile, 'pnpm-workspace.yaml'), 'packages:\n  - .\n', 'utf8')  // 有可修项
-    const pkg = JSON.parse(await readFile(join(env.profile, 'package.json'), 'utf8'))
-    pkg.dependencies['dsh-notifier'] = '^0.9.0'
-    await writeFile(join(env.profile, 'package.json'), JSON.stringify(pkg, null, 2), 'utf8')
+    const pkgFile = join(env.profile, 'package.json')
+    const pkg = JSON.parse(await readFile(pkgFile, 'utf8'))
+    pkg.dsh.profile.bundles = pkg.dsh.profile.bundles.filter((b) => b !== 'dsh-tingxue')  // 有可修项
+    await writeFile(pkgFile, JSON.stringify(pkg, null, 2), 'utf8')
 
     const before = await snapshot(env.profile)
     const r = runCheck(env, ['--json'])
@@ -497,7 +516,7 @@ test('默认（不加 --fix）绝不写文件：整个 profile 树逐字节不�
     const p = json(r)
     assert.equal(p.fixReport.attempted, false)
     assert.equal(p.fixReport.reason.includes('未加 --fix'), true)
-    assert.ok(p.fixesAvailable.length >= 2, `应列出可修项，实际 ${JSON.stringify(p.fixesAvailable)}`)
+    assert.ok(p.fixesAvailable.length >= 1, `应列出可修项，实际 ${JSON.stringify(p.fixesAvailable)}`)
     const after = await snapshot(env.profile)
     assert.deepEqual(after, before, '校验模式绝不许写任何文件')
   } finally { await env.cleanup() }

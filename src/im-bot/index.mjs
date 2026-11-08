@@ -11,8 +11,10 @@
  *  2. 只对 dsh-im 机器人当前绑定的那个会话生效，绝不污染 GUI / 别的会话；
  *  3. 落两个诊断文件，用来**确认**装配形状和注入是否真的发生，而不是靠猜。
  */
-import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const name = 'dsh-tingxue';
 export const inject = ['systemPrompt'];
@@ -63,20 +65,68 @@ const REPLACE_MARK = '<<dsh-tingxue:replace-base>>';
 const MARK_CHAT = 'chat';
 const MARK_AGENT = 'agent';
 const PERSONA_MAX_CHARS = 40000; // 档案现在 21799 字，别截断（被截掉的是末尾的新准则）
-const BASE_DIR = process.env.DSH_TINGXUE_DIAG_DIR || 'D:\\oransky\\Desktop\\oransky\\dsh\\tingxue-wiring';
-const DUMP_PATH = `${BASE_DIR}\\assembly-dump.json`;
-const STATUS_PATH = `${BASE_DIR}\\plugin-status.json`;
-const MESSAGES_PATH = `${BASE_DIR}\\messages-dump.json`;
-const RECALL_PATH = `${BASE_DIR}\\recall-dump.json`;
-const MEMCTX_PATH = `${BASE_DIR}\\memory-ctx.json`;
-const PRESTEP_PATH = `${BASE_DIR}\\prestep-dump.json`;
-const WRITEBACK_PATH = `${BASE_DIR}\\writeback.json`;
-const SECTIONS_PATH = `${BASE_DIR}\\sections-dump.json`;
-const DEFAULT_PERSONA_PATH = 'D:\\oransky\\Desktop\\oransky\\dsh\\dsh-tingxue\\听雪档案.txt';
-const DEFAULT_BOT_STATE_DIR = 'D:\\dsh-home\\integrations\\dsh-qq\\bots';
-/** 聊天/陪伴 bot：它的人格要「替换」掉 DSH 默认提示词，而不是追加。 */
-const DEFAULT_CHAT_BOT_ID = 'qq_b3cec0c0b16fdc64e91f6a60';
-const DEFAULT_MEMORY_SERVICE_URL = 'http://127.0.0.1:8766';
+/** 插件仓库根（`src/im-bot/index.mjs` 往上两级）——所有默认路径都从它推，
+ *  这样换一台机器、换一个目录都不用改代码。 */
+const REPO_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+
+/** 诊断落盘目录：默认临时目录，绝不写死某个人的工作盘。
+ *  写不进去也不影响功能（所有 write 都包在 try 里），这里只保证目录先存在。 */
+const BASE_DIR = process.env.DSH_TINGXUE_DIAG_DIR || join(tmpdir(), 'dsh-tingxue-diag');
+try { mkdirSync(BASE_DIR, { recursive: true }); } catch { /* 建不出来就静默降级 */ }
+const DUMP_PATH = join(BASE_DIR, 'assembly-dump.json');
+const STATUS_PATH = join(BASE_DIR, 'plugin-status.json');
+const MESSAGES_PATH = join(BASE_DIR, 'messages-dump.json');
+const RECALL_PATH = join(BASE_DIR, 'recall-dump.json');
+const MEMCTX_PATH = join(BASE_DIR, 'memory-ctx.json');
+const PRESTEP_PATH = join(BASE_DIR, 'prestep-dump.json');
+const WRITEBACK_PATH = join(BASE_DIR, 'writeback.json');
+const SECTIONS_PATH = join(BASE_DIR, 'sections-dump.json');
+
+/**
+ * 人格档默认位置：**仓库根目录下的 `听雪档案.txt`**。
+ *
+ * 原来的实现写死 `D:\oransky\...\听雪档案.txt`——那台机器上能跑，别人 clone 下来
+ * 路径不存在，`readPersona` 走 catch 返回 ''，于是人格块**静默变空**：不报错、
+ * 不告警，只是模型不知道自己是谁。这是最难发现的一类故障。
+ *
+ * 优先级：环境变量 > 仓库根（配置文件里显式写了就是不进这里）。
+ * 都不存在时返回 ''（不注入），由 examples/README.md 引导用户自己指一份。
+ */
+function resolvePersonaPath() {
+  const fromEnv = process.env.DSH_TINGXUE_PERSONA;
+  if (fromEnv && fromEnv.trim()) return fromEnv.trim();
+  return join(REPO_ROOT, '听雪档案.txt');
+}
+
+/**
+ * dsh-im 的 bot 状态目录（每个 bot 一个子目录，里面 state.json 记「会话键 → 会话 id」）。
+ *
+ * 原来写死 `D:\dsh-home\integrations\dsh-qq\bots`。改成从 `DSH_HOME` 推：
+ *  1. 环境变量 `DSH_TINGXUE_BOT_STATE_DIR`（显式指定，最优先）
+ *  2. `$DSH_HOME/integrations/dsh-qq/bots`（DSH 自己的约定；DSH_HOME 缺省 ~/.dsh）
+ *  3. 旧写死路径**仅当它真的存在**时兜底（老用户的目录不一定是标准形状）
+ * 三个都没有就返回第 2 条那个值——目录不存在时读不到只会让「按会话 id 判定 bot」
+ * 退化成「按 cwd 判定」，功能仍在。
+ */
+function resolveBotStateDir() {
+  const fromEnv = process.env.DSH_TINGXUE_BOT_STATE_DIR;
+  if (fromEnv && fromEnv.trim()) return fromEnv.trim();
+  const dshHome = process.env.DSH_HOME && process.env.DSH_HOME.trim()
+    ? process.env.DSH_HOME.trim()
+    : join(homedir(), '.dsh');
+  const standard = join(dshHome, 'integrations', 'dsh-qq', 'bots');
+  if (existsSync(standard)) return standard;
+  const legacy = 'D:\\dsh-home\\integrations\\dsh-qq\\bots';
+  if (process.platform === 'win32' && existsSync(legacy)) return legacy;
+  return standard;
+}
+
+/** 聊天/陪伴 bot 的 id。原来写死作者自己的 bot id；别人的 id 不同会判错。
+ *  留空即「不做 id 级判定」，`isChatSession` 会退回 cwd 判定（IM_QQ_TingXue 结尾）。 */
+const DEFAULT_PERSONA_PATH = resolvePersonaPath();
+const DEFAULT_BOT_STATE_DIR = resolveBotStateDir();
+const DEFAULT_CHAT_BOT_ID = (process.env.DSH_TINGXUE_CHAT_BOT_ID || '').trim();
+const DEFAULT_MEMORY_SERVICE_URL = (process.env.DSH_TINGXUE_MEMORY_URL || 'http://127.0.0.1:8766').trim();
 const IM_WORKSPACE_HINT = /IM_QQ/i;
 
 /** 每个会话最近一条用户消息正文（检索要用，但 context 的 text 必须是同步函数）。 */
@@ -421,7 +471,7 @@ function dumpRecall({ sessionId, tier, query, chars, text, error, hits }) {
     writeFileSync(RECALL_PATH, payload, 'utf8');
     // 两个 bot 会互相覆盖，所以再按会话存一份
     if (typeof sessionId === 'string' && sessionId) {
-      writeFileSync(`${BASE_DIR}\\recall-${sessionId.slice(-8)}.json`, payload, 'utf8');
+      writeFileSync(join(BASE_DIR, `recall-${sessionId.slice(-8)}.json`), payload, 'utf8');
     }
   } catch {
     /* 诊断写盘失败不影响检索 */
@@ -676,6 +726,14 @@ export function apply(ctx, config = {}) {
   // 包括 GUI 会话本身 —— 实测本会话 turn 41 的 system/message 直接变成 0 字。
   // 所以默认关闭；聊天 bot 改用「人格段落 + 覆盖声明」的方式压过默认提示词。
   const replaceBasePrompt = config.replaceBasePrompt === true;
+
+  // 人格档读不到时**必须说一声**：默认路径推导得再准，用户也可能没写档案。
+  // 静默变空是这类插件最坑的故障——不报错、不告警，只是模型不知道自己是谁。
+  if (personaPath && !existsSync(personaPath)) {
+    console.warn(`[dsh-tingxue] 找不到人格档：${personaPath}（人格块将为空；写法见 examples/README.md）`);
+  } else if (!personaPath) {
+    console.warn('[dsh-tingxue] 未配置人格档路径（personaPath），人格块将为空；写法见 examples/README.md');
+  }
 
   writeStatus(config, personaPath);
 

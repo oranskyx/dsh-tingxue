@@ -1,5 +1,5 @@
 # dsh-tingxue bundle patch：只往 profile 的 roster 里插一行。
-# 安装：plugin_manager install_bundle（target = file:D:/oransky/Desktop/oransky/dsh/dsh-tingxue）
+# 安装：plugin_manager install_bundle（target 指向本仓库目录，随你放在哪）
 # 改这里之后要重启 DSH 才生效。
 - insert:
     - id: dsh-tingxue
@@ -7,15 +7,28 @@
       config:
         enabled: true
         # 听雪人格提示词（用户自写的 txt）。插件只读、不写。
-        personaPath: 'D:\oransky\Desktop\oransky\dsh\dsh-tingxue\听雪档案.txt'
-        # 以下为后续阶段要用的开关，S2 阶段先占位、不生效：
-        # 记忆服务基址（唯一写者，插件只走 HTTP）
+        #
+        # 这里**故意不写绝对路径**：留空时插件按「配置 > 环境变量 > 仓库根」推导，
+        # 优先级是：
+        #   1. 本文件的 personaPath（你改成自己的绝对路径）
+        #   2. 环境变量 DSH_TINGXUE_PERSONA
+        #   3. <本仓库根>/听雪档案.txt
+        # 原来的默认值写死成作者机器上的 D:\oransky\...\听雪档案.txt，
+        # 别人 clone 下来这个路径不存在 → 人格块静默变空（不报错、只是没人格）。
+        # 写法见 examples/README.md，模板见 examples/profile.example.txt。
+        # personaPath: 'D:\my-persona\听雪档案.txt'
+        #
+        # 记忆服务基址（唯一写者，插件只走 HTTP）。可用 DSH_TINGXUE_MEMORY_URL 覆盖。
         memoryServiceUrl: 'http://127.0.0.1:8766'
-        # 记忆注入档位：off | archive | full（S3 实现）
+        # 记忆注入档位：off | archive | full
         memoryRecall: 'full'
-        # 关系扩展（S3 实现）
+        # 关系扩展
         relationExpand: false
-        # 每轮回写记忆（S4 实现）
+        # 每轮回写记忆
         memoryWriteBack: false
-        # 收工归档触发词（S8 实现）
+        # 收工归档触发词
         archiveKeyword: 'agentout'
+        # 聊天 bot 的 id（dsh-im 里那个 bot 的目录名，形如 qq_xxxxxxxx）。
+        # 留空则退回按工作目录判定（以 IM_QQ_TingXue 结尾即聊天 bot）——
+        # 别人的 bot id 和你不同，写死会判错，所以默认不写。
+        # chatBotId: 'qq_xxxxxxxxxxxxxxxxxxxx'
