@@ -2,7 +2,7 @@
 //
 // 三件事，全部围绕「同源、只读优先、永不抛错」：
 //   1. /dsh-tingxue-ui/memory/*  → 转发到本机记忆服务（默认 http://127.0.0.1:8766）。
-//      浏览器直连 8766 会被 CORS 拦下（服务端只放行 8765 来源），走宿主 webServer
+//      浏览器直连 8766 会被 CORS 拦下，走宿主 webServer
 //      的同源反代就没有跨源问题，也不用在页面里写死跨源地址。
 //   2. /dsh-tingxue-ui/ping     → 记忆服务与图谱 UI 的探活 + 往返延迟。
 //   3. /dsh-tingxue-ui/panel    → 两页共享的面板偏好（注入档位、收工归档参数等），
@@ -33,7 +33,6 @@ const CHANNELS_PATH = '/dsh-tingxue-ui/channels'
 const COMPACTION_ENTRY = 'compaction-basic'
 
 const DEFAULT_MEMORY_ORIGIN = 'http://127.0.0.1:8766'
-const DEFAULT_GRAPH_ORIGIN = 'http://127.0.0.1:8765'
 const DEFAULT_SKILLS_DIR = 'D:\\dsh-home\\skills'
 
 const PROBE_TIMEOUT_MS = 1500
@@ -203,7 +202,6 @@ async function probe(origin, path = '/') {
 
 function createRoutes(config = {}, ctx) {
   const memoryOrigin = trimSlash(config.memoryServiceUrl) || DEFAULT_MEMORY_ORIGIN
-  const graphOrigin = trimSlash(config.graphUiUrl) || DEFAULT_GRAPH_ORIGIN
   /** 最近一次浏览器半边自检回报（进程内存，不落盘）。 */
   let clientReport = null
 
@@ -463,14 +461,12 @@ function createRoutes(config = {}, ctx) {
 
   async function handlePing(req, res) {
     if (!isLoopback(req)) return sendJson(res, 403, { ok: false, error: '面板探活只允许本机 loopback 访问' })
-    const [memory, graph] = await Promise.all([
+    const [memory] = await Promise.all([
       probe(memoryOrigin, '/health'),
-      probe(graphOrigin, '/'),
     ])
     return sendJson(res, 200, {
       ok: true,
       memory: { ...memory, origin: memoryOrigin },
-      graph: { ...graph, origin: graphOrigin },
       at: Date.now(),
     })
   }
@@ -494,7 +490,6 @@ function createRoutes(config = {}, ctx) {
         skillsDir: settings.agent.skillsDir,
         archives: await listArchives(settings.agent.skillsDir),
         memoryServiceUrl: memoryOrigin,
-        graphUiUrl: graphOrigin,
         settingsFile: settingsFile(),
       })
     }
@@ -706,7 +701,6 @@ function createRoutes(config = {}, ctx) {
 
   return {
     memoryOrigin,
-    graphOrigin,
     routes: [
       { kind: 'prefix', path: MEMORY_PREFIX, handler: handleProxy },
       { kind: 'exact', path: PING_PATH, handler: handlePing },

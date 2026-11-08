@@ -7,7 +7,7 @@
 //   sidebar.panellist  ← 两个入口图标（听雪 / 听雪-agent）
 //   main               ← 两个整页组件，key 与入口 id 相同
 //
-// 所有网络请求都走 Host 半边注册的同源路径（/dsh-tingxue-ui/*），浏览器不直连 8766/8765，
+// 所有网络请求都走 Host 半边注册的同源路径（/dsh-tingxue-ui/*），浏览器不直连 8766，
 // 因此没有 CORS 问题；Host 半边没起来时页面显示「离线 / 未接线」，不白屏、不抛错。
 // 全部颜色只取宿主主题令牌（--dsw-alias-* / --dsw-radius-*），不写死深浅色。
 
@@ -29,7 +29,6 @@ window.__ModuleLoader__.load({
     /** 记忆服务面板：放所有「两个 bot 共用」的配置（模型 / API / 服务状态 / 记忆库 / QQ 通道）。 */
     const PANEL_MEMORY = 'tingxue-memory'
 
-    const DEFAULT_GRAPH = 'http://127.0.0.1:8765'
     const DEFAULT_MEMORY = 'http://127.0.0.1:8766'
     const DEFAULT_SKILLS_DIR = 'D:\\dsh-home\\skills'
 
@@ -57,7 +56,6 @@ window.__ModuleLoader__.load({
 
       status_title: '服务状态',
       memory_service: '记忆服务',
-      graph_ui: '记忆图谱 UI',
       online: '在线',
       offline: '离线',
       latency: '延迟',
@@ -457,7 +455,6 @@ window.__ModuleLoader__.load({
       const graph = ping.graph || null
       const busy = state.status === 'loading' && !state.ping
       const memoryOnline = memory ? memory.online === true : !!(state.health && state.health.ok)
-      const graphOrigin = (graph && graph.origin) || DEFAULT_GRAPH
       const memoryOrigin = (memory && memory.origin) || DEFAULT_MEMORY
 
       const card = (key, title, data, online, origin, extra) => h('div', { key, className: 'txu-status' },
@@ -475,18 +472,12 @@ window.__ModuleLoader__.load({
             : null),
         extra || null)
 
-      const graphExtra = h('div', { style: { marginTop: 10 } },
-        h('a', {
-          className: 'txu-btn txu-btn-link', href: graphOrigin, target: '_blank', rel: 'noreferrer noopener',
-        }, tr('open_graph', '打开图谱')))
-
       return h('div', { className: 'txu-status-grid' },
         card('memory', tr('memory_service', '记忆服务'), memory, memoryOnline, memoryOrigin,
           state.health && state.health.service
             ? h('div', { className: 'txu-muted', style: { marginTop: 8 } },
               text(state.health.service) + (state.health.port ? ' · :' + text(state.health.port) : ''))
-            : null),
-        card('graph', tr('graph_ui', '记忆图谱 UI'), graph, graph ? graph.online === true : false, graphOrigin, graphExtra))
+            : null))
     }
 
     // ── 统计 ────────────────────────────────────────────────────────────────

@@ -35,7 +35,6 @@
 | | |
 |---|---|
 | **双模式** | **聊天模式**（日常对话，人格 + 长期记忆，上下文结构对缓存友好）与 **agent 模式**（隔离的纯文件处理会话，用完即焚，归档进记忆） |
-| **全自动切换** | 全程只有 `/agentstart` 和 `/agentstop` 两条指令，自动建会话、自动绑定、自动回绑，不需要手动 `/bind` |
 | **自建记忆库** | LanceDB 嵌入式向量库，本地文件即库、零服务器；4 张表（记忆条目 / 实体 / 关系 / 最新信息） |
 | **自建关系图谱** | 实体抽取 → 实体链接 → 三元组关系（带时间窗口与溯源）→ 图遍历增强检索；参考 Graphiti / Mem0 实践 |
 | **可交互图谱 UI** | 零依赖 canvas 力导向蜘蛛网：节点聚类、邻居高亮、标签碰撞避免、小地图导航，离线可用 |
@@ -160,7 +159,6 @@ node <插件仓库>/scripts/install-check.mjs --fix --profile-dir /path/to/profi
 
 ```text
 （直接发消息）          → 聊天模式：有人格、有记忆、四块上下文组装
-/agentstart           → 进入 agent 模式：新建隔离会话并自动绑定
 （发文件、多轮讨论）      → 文件作为上下文持续处理
 /agentstop            → 归档对话到记忆库、删除工作副本、销毁隔离会话、自动回绑聊天会话
 ```
@@ -168,8 +166,6 @@ node <插件仓库>/scripts/install-check.mjs --fix --profile-dir /path/to/profi
 **两条指令之外没有任何手动步骤**——不用 `/bind`，也不用 `/unbind`。
 
 **发文件**：QQ 附件经 `[文件]` 标记由 pre-step 下载到 `dataDir/workcopy/` 并注入上下文。文本文件直接进上下文（单文件上限 5 MB、正文截取 8000 字符）；二进制文件只给文件名与大小元信息。聊天模式与 agent 模式都支持。
-
-**图谱面板**：默认监听 `http://127.0.0.1:8765`，浏览器打开即可看到实时的实体关系蜘蛛网。
 
 ---
 
@@ -191,7 +187,7 @@ node <插件仓库>/scripts/install-check.mjs --fix --profile-dir /path/to/profi
 
 界面里标「已覆盖」的字段表示它覆盖了部署配置，可单点**重置**回落到部署层。写入用 revision 设栅，表单漂移会被拒绝而不是覆盖并发修改。
 
-Host 与浏览器两个半侧各有一份同构的字段表（`src/settings/index.mjs` 的 `SETTINGS_FIELDS` 与 `client/client.js` 的 `FIELDS`），**当前各 29 项**，分组与键一一对应。
+面板的字段直接读写记忆服务与 dsh-im 的配置，不再单独维护一份 settings 字段表（旧的 `src/settings` + `client/client.js` 已删除）。
 
 ### 配置项
 
@@ -212,7 +208,6 @@ Host 与浏览器两个半侧各有一份同构的字段表（`src/settings/inde
 | `baseURL` | `''` | `local` / `custom` 时的 OpenAI 兼容 base URL |
 | `apiKey` | `''` | 留空则回落到 DSH 凭据服务里的 `STA1N_API_KEY` |
 | **双模式命令** | | |
-| `agentStartKeyword` | `/agentstart` | 进入 agent 模式的关键词 |
 | `agentStopKeyword` | `/agentstop` | 退出 agent 模式的关键词 |
 | `fileDeleteScope` | `workcopy` | 文件删除范围：`workcopy` 只删工作副本 / `keep` 一律保留 |
 | **绑定与推送** | | |
@@ -225,9 +220,6 @@ Host 与浏览器两个半侧各有一份同构的字段表（`src/settings/inde
 | `qqStatusNotice` | `true` | QQ 是否显示任务状态提示（🚀 任务开始 / ✅ 任务完成 / ⏹ 任务已中止 / ⏱ 心跳 / ⚠️ 疑似卡住）。关掉后这些状态行不发，**回复正文照常送达**（回复本体走 `turn/end` 通知的正文，见 `交接文档.md` §16.2）；❌ 出错通知保留 |
 | `approvalAllowlistOnly` | `true` | 审批是否只推 QQ 对话会话。打开后只有被显式放行出站的会话（听雪聊天会话 / `tingxue-agent-*` 隔离会话）的批准询问发到 QQ，其他 DSH 会话的审批只在桌面弹（需配套的 dsh-notifier 补丁，见 `交接文档.md` §16.3） |
 | **面板与服务** | | |
-| `graphDashboardEnable` | `true` | 是否启用关系图谱面板 |
-| `graphDashboardHost` | `127.0.0.1` | 图谱面板监听地址（默认仅本机 loopback） |
-| `graphDashboardPort` | `8765` | 图谱面板端口 |
 | `memoryServiceEnable` | `true` | 是否启用记忆服务（管家） |
 | `memoryServiceHost` | `127.0.0.1` | 记忆服务监听地址 |
 | `memoryServicePort` | `8766` | 记忆服务端口 |
@@ -242,7 +234,7 @@ Host 与浏览器两个半侧各有一份同构的字段表（`src/settings/inde
 > [!NOTE]
 > 本文档里凡是提到 `dsh-notifier` 的地方（配置项 `channel` / `userId` / `notifierStateFile`、状态键 `prefs:tingxue`、绑定读取路径等），
 > 都是**早期通道的历史命名**：通道已换成 `@xmanrui/dsh-im`，这些字段名与状态键为了兼容旧数据保留不变，照填即可。
-- `graphDashboardEnable` / `memoryServiceEnable` 等开关由插件启动期读取，**需重启 DSH**。
+- `memoryServiceEnable` 等开关由插件启动期读取，**需重启 DSH**。
 
 ---
 
@@ -253,29 +245,26 @@ Host 与浏览器两个半侧各有一份同构的字段表（`src/settings/inde
 ```text
 dsh-tingxue/
 ├── src/                          # Host 半侧
-│   ├── plugin-entry.mjs          # 插件入口：组装各层、接入 DSH 事件管线、注入与推送隔离
-│   ├── models/index.mjs          # 模型适配层（embedding + 小 LLM + 模型列表，可插拔）
+│   ├── im-bot/index.mjs          # 插件入口：人格注入（systemPrompt.section），记忆走 HTTP
+│   ├── panel-host.mjs            # 面板宿主：/dsh-tingxue-ui/* 路由（反代 / 模型列表 / QQ 配置）
+│   ├── memory-service/           # 记忆服务本体（DSH 唯一写者，HTTP API）
 │   ├── memory/store.mjs          # LanceDB 记忆存储（4 张表）
-│   ├── graph/index.mjs           # 关系图谱（抽取 / 链接 / 关系 / 图遍历）
-│   ├── graph-dashboard/index.mjs # 关系图谱面板（零依赖 canvas 力导向蜘蛛网）
-│   ├── memory-service/index.mjs  # 记忆服务（管家）：DSH 唯一写者，HTTP API 供 AstrBot 对接
-│   ├── model-catalog/index.mjs   # 模型目录路由：设置页模型选择器问端点有哪些模型
-│   ├── context/assemble.mjs      # 聊天模式四块上下文组装
-│   ├── context/inject.mjs        # 注入接线：异步瀑布取真值（避开 section.text 同步求值）
-│   ├── http/index.mjs            # 共享 HTTP 工具（端口探测 / JSON 读写响应）
-│   ├── state/index.mjs           # 双模式状态机（持久化 + 滑动窗口裁剪）
-│   ├── commands/index.mjs        # 关键词命令处理（含绑定失败回滚）
-│   ├── bind/index.mjs            # dsh-notifier 绑定读写 + 推送隔离 + 通知偏好
-│   ├── settings/index.mjs        # Host 半侧：注册 settings 命名空间
-│   ├── segment.mjs               # QQ 长消息句子完整分段器
-│   └── agent/index.mjs           # agent 模式（文件生命周期、归档）
-├── client/client.js              # 浏览器半侧：手写 lazy-CJS bundle（设置界面）
-├── test/                         # 单元测试（含 test/patches/ 补丁验证，不随主测试集）
-├── astrbot-plugin/               # AstrBot 群聊对接插件（Python）
-├── research/                     # 第三方参考材料（不进公开仓库）
-├── cordis.patch.yml              # bundle patch（插件行声明）
-└── package.json
-```
+│   ├── graph/index.mjs           # 关系图谱（抽取 / 链接 / 关系 / 图遍历，无 UI）
+│   ├── models/index.mjs          # 模型适配层（embedding + 小 LLM + 模型列表）
+│   └── http/index.mjs            # 共享 HTTP 工具（端口探测 / JSON 响应）
+├── client/                       # 浏览器半侧
+│   ├── panel.js                  # 三个面板：聊天 / agent / 记忆服务（手写 lazy-CJS）
+│   ├── icon.svg                  # 插件图标（六角雪花）
+│   └── locale/                   # 面板文案
+├── service/                      # 独立记忆服务（nssm 或 ps1 启动，DSH 关了也能跑）
+│   ├── memory-service.mjs        # 服务入口
+│   ├── config.example.json       # 配置模板（空串 = 用推导出的默认值）
+│   └── install-nssm.ps1          # 装成 Windows 服务
+├── test/                         # 单元测试
+├── scripts/                      # run-tests / selfcheck / install-check
+├── examples/                     # 人格档模板
+└── cordis.patch.yml              # bundle 补丁（往 roster 里插一行）
+
 
 ### 记忆库表结构（LanceDB）
 
@@ -379,31 +368,6 @@ packages/core/agent-loop/src/agent.ts:230      preStep 先 await assemble()，�
 - **视觉**：① 按类型聚类（`clusterCenters`）② hover 邻居高亮 + 非邻居淡出（`focusSet`）③ 标签碰撞避免（`labelRects` 包围盒跳过重叠）④ 右下角小地图（标准缩略图模式，点击跳转视口）⑤ 背景网格固定视口，不随缩放平移移动。
 - **两个坑**：HTML 模板字符串里的内联 `onclick` 绝不能用 `\'` 转义单引号（要用 HTML 实体 `&#39;`）；canvas 顶部有 56px 标题栏，所有事件坐标必须经 `canvasOffset()` + `evtPos()` 转成画布相对坐标。
 
-### 双模式与会话隔离
-
-**聊天模式（默认）**
-QQ 一进来就是聊天会话，四块上下文组装，有人格与长期记忆。
-
-**agent 模式（隔离会话，用完即焚）**
-
-- **进入**：`/agentstart` → 用 `ctx.agents.create()` 新建隔离会话（只注入听雪档案，不含聊天记忆与历史）→ 自动绑定。
-- **处理**：文件作为上下文持续处理，可多轮。
-- **退出**：`/agentstop` → 归档对话与文件摘要到记忆库 → 删除工作副本 → `dispose()` 销毁隔离会话 → 自动回绑聊天会话。
-
-**会话隔离铁律**
-
-`session/event` 与 `agent/inbox/inserted` 监听器对所有会话生效，因此**必须按 `session.id` 过滤**：聊天模式只在 `sessionId === chatSessionId` 时写记忆；agent 模式只在 `isAgentSession(session)` 时补全待归档轮次。两种会话的记忆与上下文完全隔离。
-
-**`dsh-tingxue-context` 段的注册位置**
-
-`systemPrompt.section` 是**作用域继承**的：注册在插件 root ctx 会对该 profile 下**所有**会话生效（人格/记忆泄漏到无关会话 = 上下文串线）。因此本插件把它注册在**聊天会话自己的 agent 作用域**（`agent.ctx.get('systemPrompt').section()` + `agent.ctx.effect`），只对聊天会话可见，并随该 agent dispose 自动卸载。
-
-### 推送隔离
-
-通过 dsh-notifier 的 `route:agents` 做出口分流：静默默认 workspace（`channels: []`），再精确放行听雪的聊天会话。插件 init 时写一次，`/agentstart` / `/agentstop` 期间动态维护。结果是其他 DSH 会话的 turn/end、审批与错误通知不再广播到 QQ。
-
-> 审批与远程提问是**另一条**更容易漏的出口：`approval/router.mjs` 的 `resolveApprovalChannels()` 只取 `channelTypes`、忽略 `quiet`，而空集还会回落全局广播。配套补丁把判据换成「只推 `route:agents` 里被显式放行的会话」，见 `交接文档.md` §16.3 / §16.8。
-
 ### 模型适配层（可插拔）
 
 `src/models/index.mjs` 把两种能力抽象成统一接口：
@@ -444,7 +408,7 @@ complete(prompt)    // 小 LLM 语义推理
 
 宿主没有 `webServer` 服务时路由静默跳过，选择器退化成手填模型 id，不影响其他功能。
 
-API Key 的解析走 DSH credentials 服务，**每次 resolve 时重新 `ctx.get('credentials')`**，不能在 init 时同步捕获闭包——init 早于 credentials 挂载时闭包会固定为 `undefined`，之后每次取 key 都 401。模型适配层与模型目录路由共用 `plugin-entry.mjs` 里的同一份 `resolveApiKey`，保证两条路径取到同一把 key。
+API Key 的解析走 DSH credentials 服务，**每次 resolve 时重新 `ctx.get('credentials')`**，不能在 init 时同步捕获闭包——init 早于 credentials 挂载时闭包会固定为 `undefined`，之后每次取 key 都 401。模型适配层与面板的模型列表路由共用同一份 key 解析逻辑，保证两条路径取到同一把 key。
 
 **换 key 只改一处**：`$DSH_HOME/.credentials.yaml` 里的 `STA1N_API_KEY`（`sta1n` 后端的 `apiKeyEnv`）。插件、运行时副本、AstrBot 插件都不需要改——插件经凭据服务取 key，AstrBot 经 HTTP 服务间接使用。改完**重启 DSH** 生效。
 
@@ -454,40 +418,6 @@ API Key 的解析走 DSH credentials 服务，**每次 resolve 时重新 `ctx.ge
 # 拉线上列表（需要有效 key），与 settings.yaml 的 - id: 条目对比
 node -e "fetch('https://cdn.sta1n.cn/v1/models',{headers:{Authorization:'Bearer '+process.env.K}}).then(r=>r.json()).then(j=>console.log(j.data.map(m=>m.id).sort().join('\n')))"
 ```
-
----
-
-## 会话隔离与模式自愈
-
-这是本项目历史上踩得最贵的两个坑，均已修复并固化。
-
-### 症状
-
-`state.json` 的 `mode` 残留在 `agent`，但 dsh-notifier 的 `bind:qq:<userId>` 实际还指向**聊天会话**。此时：
-
-- QQ 消息仍然投递到聊天会话（绑定没变）；
-- 但上下文注入在 agent 模式下直接返回空（旧实现是 `refreshContext()` 置空 `cachedContextText`，现在等价于 `buildContextText()` 在 `state.isAgentMode()` 时返回 `null`）；
-- 结果：**人格、记忆、最近对话三块全部静默消失**，而"隔离"根本没发生——静默失忆的最坏组合。
-
-真机实测：system 提示词从 11,682 字符掉到 6,827 字符，听雪的块全部消失，QQ 那头毫无提示。
-
-### 根因
-
-1. `POST /agentstart` 路径里，`createIsolatedAgent()` 无论 `setBinding()` 成功与否都返回 `{ ok: true }`，调用方只检查 `result.ok` → 绑定没切成也照样 `state.enterAgent()`。
-2. 「agent 模式就置空注入」是唯一一处"置空"逻辑（旧实现是 `refreshContext()` 的第二行，现在等价于 `buildContextText()` 里的 `state.isAgentMode()` 早退），agent 模式一旦误判就全线失守。
-3. `mode` 是持久化的，误判会跨重启存活。
-
-### 三层防御（已实现）
-
-| 层 | 位置 | 行为 |
-|---|---|---|
-| **写前守卫** | `commands/index.mjs` | `createIsolatedAgent()` 回传 `bound`；`/agentstart` 在 `!result.bound` 时调用 `rollbackIsolatedAgent()`（dispose 会话 + 清精确放行路由）并保持聊天模式，直接回复失败原因 |
-| **启动自检** | `plugin-entry.mjs` §5.1.3 | 启动时若 `state.isAgentMode()` 且 `bind` 未指向 `state.agentSessionId`，立即 `exitAgent()` 并告警 |
-| **运行期 reconcile** | `plugin-entry.mjs` | `agent/inbox/inserted` 命中聊天会话且处于 agent 模式时调用 `reconcileAgentMode()`（`reconciling` 标志防重入），比对真实绑定；漂移则 `exitAgent()` + `ensureContextText(true)` 强制重组装恢复注入 |
-
-**判据统一为一句话**：agent 模式只有在 QQ 确实绑着那个隔离会话时才算数。
-
-> 副作用记录：`/agentstart` 曾经在失败路径留下 295 字节的空壳隔离会话（`tingxue-agent-*`）。`rollbackIsolatedAgent()` 就是为了不留残留而加的。
 
 ---
 
@@ -556,20 +486,13 @@ node "test/context.test.mjs"
 node "test/graph.test.mjs"
 node "test/bind.test.mjs"
 node "test/dashboard.test.mjs"
-node "test/memory-service.test.mjs"
-node "test/segment.test.mjs"
-node "test/settings.test.mjs"      # Host 半侧：settings 命名空间注册
-node "test/client-card.test.mjs"   # 浏览器半侧：设置界面 bundle
-node "test/state.test.mjs"         # 双模式状态机 + 滑动窗口裁剪
-node "test/inject.test.mjs"        # 注入时序（异步瀑布取真值）
-node "test/selfcheck.test.mjs"     # 自检脚本自身（证明它会红，不是橡皮图章）
-node "test/notifier-suppress.test.mjs"     # 命令消费不该被报成「任务被阻塞」
-node "test/bigint.test.mjs"        # LanceDB Int64 是 BigInt（含真机契约：expand 不得挂死）
-node "test/agent-mode-e2e.test.mjs"        # /agentstart → /agentstop 真机全流程（34 项）
-node "test/install-check.test.mjs"         # 安装安全流程：坏环境真判红 + 回滚真还原 + 凭据不回显
-node "test/patches/_qq-segment.test.mjs"   # 历史 QQ 分段补丁（不随主测试集）
-```
-
+node "test/memory-service.test.mjs"  # 记忆服务 HTTP API（真实 LanceDB 临时库）
+node "test/manage-api.test.mjs"      # 实体/关系/记忆/回收站/审计/配置
+node "test/store.test.mjs"           # LanceDB 存储层
+node "test/graph.test.mjs"           # 关系抽取 / 图遍历
+node "test/selfcheck.test.mjs"       # 自检脚本自身（证明它会红，不是橡皮图章）
+node "test/bigint.test.mjs"          # LanceDB Int64 是 BigInt（含真机契约）
+node "test/install-check.test.mjs"   # 安装安全流程：坏环境真判红 + 回滚真还原
 ### 运行安装自检
 
 装完/改完 profile 后跑，判断「装上了但没生效」：
@@ -615,7 +538,7 @@ node scripts/selfcheck.mjs --started=2026-09-26T18:13:29+08:00   # 覆盖「DSH 
 ```text
   ✓ 运行副本与仓库源码一致（内容哈希）
   ✗ 需要重启 DSH —— 副本在进程启动后被写入
-      副本最新写入的是 src/plugin-entry.mjs：2026/9/26 19:24:44；而 DSH 进程启动于 2026/9/26 18:13:29 —— 副本晚 71 分钟。
+      副本最新写入的插件文件晚于 DSH 进程启动时间 —— 说明插件是后来才改的，进程里跑的还是旧代码。
       Node 在 import 期就加载完了模块，所以该进程装的仍是写入前的那份内容；副本内容虽与仓库一致，也必须重启 DSH 才真正生效。
 ```
 

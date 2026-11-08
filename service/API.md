@@ -7,14 +7,14 @@
 
 ## 0. 通用
 
-- Base：`http://127.0.0.1:8766`（API）；`http://127.0.0.1:8765`（图谱 UI + `/api/*` 同源别名）。
+- Base：`http://127.0.0.1:8766`（唯一端口；8765 的网页面板已删除）。
 - 请求/响应：`application/json; charset=utf-8`。
 - 成功：`{ ok: true, ... }`；失败：`{ ok: false, error: string, code?: string }`，HTTP 4xx/5xx。
 - 分页：`limit`（默认 50，最大 500）、`offset`（默认 0）；列表响应带 `total`（可用就带）。
 - 身份：服务端权威 `memoriesIdentity`（默认 `user`）；管理读接口可传 `identity=*` 查看全部（只读诊断用途），写接口不接受客户端 identity。
 - 时间：毫秒时间戳（number）。`validTo = 0` 表示关系仍然有效。
 - 并发：写操作进入写队列；读操作并行。
-- CORS：允许 `http://127.0.0.1:8765`、`http://localhost:8765` 的 GET/POST/PATCH/DELETE/OPTIONS。
+- CORS：允许本机 loopback 来源的 GET/POST/PATCH/DELETE/OPTIONS。
 
 ## 1. 现有端点（保持不变）
 
@@ -155,8 +155,7 @@ body：`{text?, scene?}`；改 `text` 时重嵌入。
     "ok": true,
     "config": {
       "dataDir": "...", "profilePath": "...", "memoryServiceHost": "127.0.0.1",
-      "memoryServicePort": 8766, "graphDashboardHost": "127.0.0.1",
-      "graphDashboardPort": 8765, "memoriesIdentity": "user",
+      "memoryServicePort": 8766, "memoriesIdentity": "user",
       "modelBackend": "sta1n", "embeddingModel": "gemini-embedding-2",
       "embeddingDimensions": 3072, "llmModel": "gemini-3.1-flash-lite",
       "apiBaseUrl": "https://cdn.sta1n.cn/v1"
@@ -174,8 +173,7 @@ body：`{text?, scene?}`；改 `text` 时重嵌入。
 body：以下字段的任意子集（未知字段忽略）。
 
 **非机密字段**（写 `service/config.json`，保留未知字段）：
-`dataDir / profilePath / memoryServiceHost / memoryServicePort / graphDashboardHost /
-graphDashboardPort / memoriesIdentity / modelBackend / embeddingModel /
+`dataDir / profilePath / memoryServiceHost / memoryServicePort / memoriesIdentity / modelBackend / embeddingModel /
 embeddingDimensions / llmModel`，行为与之前一致。
 
 **API 字段**（写 `<dataDir>/secrets.json`，**即时生效**，无需重启）：
@@ -207,11 +205,8 @@ embeddingDimensions / llmModel`，行为与之前一致。
 
 ## 7. 图谱 UI 与静态资源
 
-- 8765 端口：`GET /`、`GET /graph` → `service/ui/index.html`；`GET /ui/*` → 静态文件；`GET /api/*` → 与 8766 同处理器（同源别名）；`GET /graph-data.json` → `{nodes,links}` 兼容旧页面。
-- 8766 端口：保留 `/graph` 重定向到 8765（可选）。
 - UI 读取 query `?api=`（默认 `/api`）、`?theme=light|dark|auto`（默认 auto）；资源路径必须是**相对路径**（`./app.js`），以便 DSH 反代。
 - DSH 侧反代契约（由插件实现）：
-  - `/dsh-tingxue/graph/*` → `http://127.0.0.1:8765/*`
   - `/dsh-tingxue/memory/*` → `http://127.0.0.1:8766/*`
   - iframe src：`/dsh-tingxue/graph/?api=/dsh-tingxue/memory&theme=auto`
 

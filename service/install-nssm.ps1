@@ -75,7 +75,7 @@ if ($code -ne 0) { Say 'ERROR: nssm install failed'; exit 1 }
 $settings = @(
   @('AppDirectory', $repo),
   @('DisplayName', 'Tingxue Memory Service'),
-  @('Description', 'Tingxue independent memory service: LanceDB single writer + graph UI on 127.0.0.1:8766/8765.'),
+  @('Description', 'Tingxue independent memory service: LanceDB single writer on 127.0.0.1:8766.'),
   @('Start', 'SERVICE_AUTO_START'),
   @('AppStdout', (Join-Path $logs 'memory-service.out.log')),
   @('AppStderr', (Join-Path $logs 'memory-service.err.log')),
