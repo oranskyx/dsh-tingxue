@@ -737,6 +737,15 @@ export function apply(ctx, config = {}) {
 
   writeStatus(config, personaPath);
 
+  // 面板的宿主半侧（`/dsh-tingxue-ui/*` 路由：反代记忆服务、面板偏好、模型列表、QQ 配置）。
+  //
+  // 为什么放在这里而不是单独一个插件：面板要跟着主包一起装，用户不该被要求
+  // 「再装一个包才有设置页」。动态 import + catch 保证**面板挂了也绝不影响人格注入**
+  // —— 这是本仓库的第一条自律（装配不能被搞崩）。
+  void import('../panel-host.mjs')
+    .then((mod) => { try { mod.apply(ctx, config) } catch (e) { console.warn('[dsh-tingxue] 面板宿主挂载失败', e?.message ?? e) } })
+    .catch((e) => console.warn('[dsh-tingxue] 面板宿主加载失败', e?.message ?? e));
+
   const register = (promptCtx) => {
     // 人格必须进 section（真正的 system 提示词），不能进 context：
     // context 通道会被 DSH 渲染成一条 user 角色的「Current runtime context」

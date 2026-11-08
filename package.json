@@ -6,9 +6,12 @@
   "main": "src/im-bot/index.mjs",
   "exports": {
     ".": "./src/im-bot/index.mjs",
+    "./client": "./client/panel.js",
+    "./icon": "./client/icon.svg",
     "./package.json": "./package.json"
   },
   "files": [
+    "client",
     "src",
     "service/memory-service.mjs",
     "service/config.example.json",
@@ -33,6 +36,13 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
     }
   },
   "peerDependencies": {
