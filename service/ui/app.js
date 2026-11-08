@@ -1383,6 +1383,18 @@
     })
     graph.setTypeFilter(state.type)
     graph.setSearch(state.search)
+
+    // iframe 里第一次量到的尺寸可能还没稳定（父容器刚布局完），补两次校准：
+    // 一次在布局落定后，一次在字体/滚动条都稳定后。只在尺寸真的变了才重画。
+    ;[400, 1200].forEach(function (delay) {
+      global.setTimeout(function () {
+        try {
+          if (!graph) return
+          graph.resize()
+          graph.fit()
+        } catch (error) { /* 卸载或空图时忽略 */ }
+      }, delay)
+    })
   }
 
   // ============================================================

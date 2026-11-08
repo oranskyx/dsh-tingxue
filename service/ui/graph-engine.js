@@ -147,9 +147,16 @@
       return true
     }
 
-    /** 节点基础半径：随视口尺寸自适应。 */
+    /**
+     * 节点基础半径：随视口尺寸自适应。
+     *
+     * 下限从 9 提到 14：这个页面现在也会被嵌进 DSH 面板的 iframe 里，那里视口
+     * 只有 900×520 上下，min(w,h)/50 算出来约 10.4，再乘 0.52 只剩 5.4px——
+     * 看起来就是一粒粒「小点点」。下限 14 让窄视口也有 7.3px，接近全屏的 9.4px，
+     * 同时全屏（min=900 → 18）的外观完全不变。
+     */
     function baseRadius() {
-      return clamp(Math.min(size.w || 900, size.h || 600) / 50, 9, 20)
+      return clamp(Math.min(size.w || 900, size.h || 600) / 50, 14, 20)
     }
 
     function nodeRadius() {
