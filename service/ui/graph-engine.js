@@ -286,14 +286,22 @@
     function simulate() {
       var count = nodes.length
       if (!count) return
-      var activeCount = applyRepulsion(count)
-      applySprings(activeCount)
-      integrate(activeCount)
+      // 只有斥力是 O(n²)、需要按视口面积限预算；弹簧 O(E)、积分 O(n) 都很便宜，
+      // 必须全量。2026-11-08 的 bug 就是这三件事共用了同一个 activeCount：
+      // iframe（900×520）预算只算出 374，第 375~402 个节点既没有斥力、也没有弹簧、
+      // 连向心力和阻尼都不加——它们原地冻结、互相重叠，看起来是「有些点根本不动」。
+      applyRepulsion(count)
+      applySprings()
+      integrate()
     }
 
     /** 斥力：仅在作用半径内的节点对之间施加；参与数受视口面积限制，避免超大图 O(n²) 卡死。 */
     function applyRepulsion(count) {
-      var activeCount = Math.min(count, Math.floor((size.w || 900) * (size.h || 600) * 0.0008))
+      // 预算 = 面积 × 系数，但至少 600 个：402 个实体在面板 iframe（900×520）里
+      // 也必须全员参与，否则被截掉的那些节点彼此不排斥，会被弹簧拽成一坨。
+      // 上千节点的超大图仍按面积上限截断，保住 O(n²) 的帧时间。
+      var forceBudget = Math.max(600, Math.floor((size.w || 900) * (size.h || 600) * 0.0025))
+      var activeCount = Math.min(count, forceBudget)
       for (var i = 0; i < activeCount; i++) {
         var nodeA = positions[i]
         for (var j = i + 1; j < activeCount; j++) {
@@ -316,10 +324,9 @@
       return activeCount
     }
 
-    function applySprings(activeCount) {
+    function applySprings() {
       for (var index = 0; index < edges.length; index++) {
         var edge = edges[index]
-        if (edge._s >= activeCount || edge._t >= activeCount) continue
         var a = positions[edge._s]
         var b = positions[edge._t]
         var dx = b.x - a.x
@@ -335,10 +342,10 @@
       }
     }
 
-    function integrate(activeCount) {
+    function integrate() {
       var centerX = (size.w || 900) / 2
       var centerY = (size.h || 600) / 2
-      for (var i = 0; i < activeCount; i++) {
+      for (var i = 0; i < nodes.length; i++) {
         velocities[i].x += (centerX - positions[i].x) * PHYSICS.centerX
         velocities[i].y += (centerY - positions[i].y) * PHYSICS.centerY
         velocities[i].x *= PHYSICS.damping
