@@ -11,15 +11,21 @@
 // 安全边界：所有路由只接受本机 loopback 来源（反代的是本机管理接口），
 // 上游不可达一律回 502 JSON，绝不把连接错误抛给宿主进程。
 
+import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 /** 反代前缀；客户端 client.js 用同一个常量。 */
 const MEMORY_PREFIX = '/dsh-tingxue-ui/memory'
 /** 图谱界面（8765）同源反代前缀。iframe 只认同源，必须由宿主转发。 */
 const GRAPH_PREFIX = '/dsh-tingxue-graph'
+/** 一键启动记忆服务（面板里点按钮走这里，不用去开终端）。 */
+const SERVICE_START_PATH = '/dsh-tingxue-ui/service/start'
+const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const PING_PATH = '/dsh-tingxue-ui/ping'
 const PANEL_PATH = '/dsh-tingxue-ui/panel'
 /** 浏览器半边注册成功后的自检回报；只存最近一次，用于排障。 */
@@ -299,6 +305,54 @@ function createRoutes(config = {}, ctx) {
     } finally {
       clearTimeout(timer)
     }
+  }
+
+  /**
+   * 一键启动记忆服务。
+   *
+   * 为什么不是「插件自己拉起来」：DSH 的 job object 会连坐杀掉自己 spawn 的子进程
+   * （start-tingxue-memory.ps1 的注释里记着这条教训）。这里改成让人点按钮触发，
+   * 并且用 detached + unref，尽量脱离当前进程组；万一还是被连坐，至少用户看得见
+   * 失败原因，而不是某个面板莫名其妙空白。
+   */
+  async function handleServiceStart(req, res) {
+    if (!isLoopback(req)) return sendJson(res, 403, { ok: false, error: '只允许本机 loopback 触发启动' })
+
+    // 已经在跑就别再起一个（会抢端口）。
+    try {
+      const probe = await fetch(`${memoryOrigin}/health`, { signal: AbortSignal.timeout(1500) })
+      if (probe.ok) return sendJson(res, 200, { ok: true, already: true, message: '记忆服务已在运行' })
+    } catch { /* 没起来，继续往下走 */ }
+
+    const script = join(REPO_ROOT, 'service', 'memory-service.mjs')
+    if (!existsSync(script)) {
+      return sendJson(res, 500, { ok: false, error: `找不到服务入口：${script}` })
+    }
+
+    // Electron 的 exe 加上这个环境变量就以 Node 模式跑，等价于 node 本身。
+    const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+    try {
+      const child = spawn(process.execPath, [script], {
+        cwd: REPO_ROOT,
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+        env,
+      })
+      child.unref()
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `启动失败：${String(error?.message ?? error)}` })
+    }
+
+    // 给服务 6 秒起来（Embedding 初始化要读 LanceDB），期间反复探活。
+    for (let i = 0; i < 12; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      try {
+        const probe = await fetch(`${memoryOrigin}/health`, { signal: AbortSignal.timeout(1200) })
+        if (probe.ok) return sendJson(res, 200, { ok: true, started: true, message: '记忆服务已启动' })
+      } catch { /* 继续等 */ }
+    }
+    return sendJson(res, 502, { ok: false, error: '已发出启动命令，但 6 秒内没探到健康响应；稍后刷新，或手动运行 start-tingxue-memory.ps1 看报错' })
   }
 
   // ── QQ 通道（dsh-im 的 config.json + workspaces.json）─────────────────────
@@ -755,6 +809,7 @@ function createRoutes(config = {}, ctx) {
     routes: [
       { kind: 'prefix', path: MEMORY_PREFIX, handler: handleProxy },
       { kind: 'prefix', path: GRAPH_PREFIX, handler: handleGraphProxy },
+      { kind: 'exact', path: SERVICE_START_PATH, handler: handleServiceStart },
       { kind: 'exact', path: PING_PATH, handler: handlePing },
       { kind: 'exact', path: PANEL_PATH, handler: (req, res) => handlePanel(req, res, ctx) },
       { kind: 'exact', path: CONTEXT_PATH, handler: handleContext },

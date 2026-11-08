@@ -45,6 +45,12 @@ window.__ModuleLoader__.load({
       graph_fallback: '如果上面是空白，说明内嵌被拦了——',
       graph_open_raw: '在新标签页打开图谱',
       graph_fallback2: '（同一份数据，只是外面少了面板壳）',
+      service_offline_title: '记忆服务没在运行',
+      service_offline_desc: '8766 没有响应，所以这里既没有图谱数据也没有管理界面。',
+      service_start: '启动记忆服务',
+      service_starting: '正在启动…',
+      service_started: '已启动，正在刷新…',
+      service_start_failed: '启动失败：{reason}',
 
       loading: '连接中…',
       refresh: '刷新',
@@ -1374,6 +1380,29 @@ window.__ModuleLoader__.load({
     function GraphPage(props) {
       const tr = pageTr(props)
       const [state, reload] = useDashboard()
+      const [boot, setBoot] = React.useState({ busy: false, note: '' })
+      const ping = state.ping || {}
+      const graph = ping.graph || null
+      const memory = ping.memory || null
+      // 两个服务同进程（8766 带 8765），任一探活成功就算在线。
+      const online = (graph && graph.online === true) || (memory && memory.online === true)
+
+      async function startService() {
+        setBoot({ busy: true, note: '' })
+        try {
+          const res = await fetch('/dsh-tingxue-ui/service/start', { method: 'POST' })
+          const data = await res.json().catch(() => ({}))
+          if (data && data.ok) {
+            setBoot({ busy: false, note: tr('service_started', '已启动，正在刷新…') })
+            reload()
+          } else {
+            setBoot({ busy: false, note: tr('service_start_failed', '启动失败：{reason}').replace('{reason}', (data && (data.error || data.message)) || res.status) })
+          }
+        } catch (error) {
+          setBoot({ busy: false, note: tr('service_start_failed', '启动失败：{reason}').replace('{reason}', String(error && error.message || error)) })
+        }
+      }
+
       return h('div', { className: 'txu-page', 'data-dsh-tingxue-ui': 'graph' },
         h('style', null, CSS),
         h('div', { className: 'txu-inner txu-inner-graph' },
@@ -1382,12 +1411,28 @@ window.__ModuleLoader__.load({
             sub: tr('graph_sub', '实体关系可视化 · 实体 / 关系 / 记忆 / 回收站'),
             state, tr, onRefresh: reload,
           }),
-          h('iframe', {
-            className: 'txu-graph-frame',
-            src: '/dsh-tingxue-graph/',
-            title: tr('graph_title', '记忆图谱'),
-          }),
-          h('p', { className: 'txu-muted', style: { marginTop: '8px' } },
+          !online && state.status !== 'loading'
+            ? h(Card, { key: 'svc' },
+              h('div', { className: 'txu-row', style: { justifyContent: 'space-between', alignItems: 'center', gap: '12px' } },
+                h('div', null,
+                  h('div', { style: { fontWeight: 600 } }, tr('service_offline_title', '记忆服务没在运行')),
+                  h('div', { className: 'txu-muted' }, tr('service_offline_desc', '8766 没有响应，所以这里既没有图谱数据也没有管理界面。'))),
+                h('button', {
+                  type: 'button',
+                  className: 'txu-btn txu-btn-primary',
+                  disabled: boot.busy,
+                  onClick: startService,
+                }, boot.busy ? tr('service_starting', '正在启动…') : tr('service_start', '启动记忆服务'))),
+              boot.note ? h('p', { className: 'txu-muted', style: { marginTop: '8px' } }, boot.note) : null)
+            : null,
+          online
+            ? h('iframe', {
+              className: 'txu-graph-frame',
+              src: '/dsh-tingxue-graph/',
+              title: tr('graph_title', '记忆图谱'),
+            })
+            : null,
+          online ? h('p', { className: 'txu-muted', style: { marginTop: '8px' } },
             tr('graph_fallback', '如果上面是空白，说明内嵌被拦了——') ,
             h('a', {
               href: 'http://127.0.0.1:8765/',
@@ -1395,7 +1440,8 @@ window.__ModuleLoader__.load({
               rel: 'noreferrer',
               style: { color: 'var(--dsw-alias-state-business-primary, #4c8dff)' },
             }, tr('graph_open_raw', '在新标签页打开图谱')),
-            tr('graph_fallback2', '（同一份数据，只是外面少了面板壳）'))))
+            tr('graph_fallback2', '（同一份数据，只是外面少了面板壳）'))
+            : null))
     }
 
     function MemoryPage(props) {
