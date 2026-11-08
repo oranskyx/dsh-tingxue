@@ -55,9 +55,16 @@
 | **DeepSeek Harness** | `0.1.1-rc.2` 或更高 | 插件运行宿主 |
 | **@xmanrui/dsh-im** | `>= 5.0.3` | QQ 通道（收发消息全交给它，本插件只做人格装配与记忆）。见 `package.json` 的 `peerDependencies` |
 | **pnpm** | 任意近期版本 | 安装 `@lancedb/lancedb` 时需要解析原生依赖 |
-| **一个 LLM / embedding 端点** | — | 默认走 sta1n 供应商，也可切换本地 OpenAI 兼容端点 |
+| **一个 LLM / embedding 端点** | — | 默认走 sta1n 供应商，也可切换本地 OpenAI 兼容端点（`modelBackend: local` / `custom`）。**没有端点和 key 时插件能装但记忆不工作** |
+| **QQ 机器人凭据** | — | 在 QQ 开放平台建一个机器人，拿 `appId` + `appSecret` 填进 `@xmanrui/dsh-im` 的配置。没有它：插件装好也**不会有任何消息进来** |
+| **一个已绑定的会话** | — | dsh-im 侧要有 `bind:qq:<你的 userId>` → 某个会话的绑定。没有它：消息进来了但插件认不出该注入谁的人格（会一直走「非 IM 会话」分支） |
 
 外部依赖仅两个运行时包：`@lancedb/lancedb` 与 `apache-arrow`（版本锁 `18.1.0`）。
+
+> [!IMPORTANT]
+> 上面带 **QQ** 字样的两条是「能不能真的在 QQ 里说话」的硬前置。只装插件不配它们，现象是
+> **零报错、零日志、零反应** —— 这类沉默最难排查，所以单独列出来。
+> 只想先在本地验证人格与记忆，可以跳过它们，改用 GUI 里的「听雪」设置页看装配结果。
 
 ---
 
