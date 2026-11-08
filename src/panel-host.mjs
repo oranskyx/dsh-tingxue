@@ -18,6 +18,8 @@ import { dirname, join } from 'node:path'
 
 /** 反代前缀；客户端 client.js 用同一个常量。 */
 const MEMORY_PREFIX = '/dsh-tingxue-ui/memory'
+/** 图谱界面（8765）同源反代前缀。iframe 只认同源，必须由宿主转发。 */
+const GRAPH_PREFIX = '/dsh-tingxue-graph'
 const PING_PATH = '/dsh-tingxue-ui/ping'
 const PANEL_PATH = '/dsh-tingxue-ui/panel'
 /** 浏览器半边注册成功后的自检回报；只存最近一次，用于排障。 */
@@ -33,6 +35,7 @@ const CHANNELS_PATH = '/dsh-tingxue-ui/channels'
 const COMPACTION_ENTRY = 'compaction-basic'
 
 const DEFAULT_MEMORY_ORIGIN = 'http://127.0.0.1:8766'
+const DEFAULT_GRAPH_ORIGIN = 'http://127.0.0.1:8765'
 const DEFAULT_SKILLS_DIR = 'D:\\dsh-home\\skills'
 
 const PROBE_TIMEOUT_MS = 1500
@@ -202,6 +205,7 @@ async function probe(origin, path = '/') {
 
 function createRoutes(config = {}, ctx) {
   const memoryOrigin = trimSlash(config.memoryServiceUrl) || DEFAULT_MEMORY_ORIGIN
+  const graphOrigin = trimSlash(config.graphDashboardUrl) || DEFAULT_GRAPH_ORIGIN
   /** 最近一次浏览器半边自检回报（进程内存，不落盘）。 */
   let clientReport = null
 
@@ -246,6 +250,52 @@ function createRoutes(config = {}, ctx) {
     } catch (error) {
       const reason = error?.name === 'AbortError' ? '请求超时' : String(error?.message ?? error)
       sendJson(res, 502, { ok: false, error: `记忆服务不可达（${memoryOrigin}）：${reason}` })
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /**
+   * 图谱界面反代：/dsh-tingxue-graph/<path> → http://127.0.0.1:8765/<path>。
+   * 只转发 GET/HEAD（那是只读的看图界面），并原样透传 content-type，
+   * 这样 index.html / app.js / styles.css / graph-data.json 都能直接跑。
+   */
+  async function handleGraphProxy(req, res) {
+    if (!isLoopback(req)) return sendJson(res, 403, { ok: false, error: '图谱界面只允许本机 loopback 访问' })
+    let rest = '/'
+    let search = ''
+    try {
+      const url = new URL(String(req.url ?? '/'), 'http://localhost')
+      rest = url.pathname.slice(GRAPH_PREFIX.length) || '/'
+      if (!rest.startsWith('/')) rest = `/${rest}`
+      search = url.search
+    } catch {
+      return sendJson(res, 400, { ok: false, error: '无法解析请求地址' })
+    }
+
+    const method = String(req.method ?? 'GET').toUpperCase()
+    if (!['GET', 'HEAD'].includes(method)) {
+      return sendJson(res, 405, { ok: false, error: '图谱界面只读' }, { Allow: 'GET, HEAD' })
+    }
+
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS)
+    try {
+      const upstream = await fetch(graphOrigin + rest + search, {
+        method,
+        signal: controller.signal,
+        headers: { accept: String(req.headers?.accept ?? '*/*') },
+      })
+      const buffer = Buffer.from(await upstream.arrayBuffer())
+      res.writeHead(upstream.status, {
+        'content-type': upstream.headers.get('content-type') || 'application/octet-stream',
+        'cache-control': 'no-store',
+        'content-length': buffer.length,
+      })
+      res.end(buffer)
+    } catch (error) {
+      const reason = error?.name === 'AbortError' ? '请求超时' : String(error?.message ?? error)
+      sendJson(res, 502, { ok: false, error: `图谱界面不可达（${graphOrigin}）：${reason}` })
     } finally {
       clearTimeout(timer)
     }
@@ -701,8 +751,10 @@ function createRoutes(config = {}, ctx) {
 
   return {
     memoryOrigin,
+    graphOrigin,
     routes: [
       { kind: 'prefix', path: MEMORY_PREFIX, handler: handleProxy },
+      { kind: 'prefix', path: GRAPH_PREFIX, handler: handleGraphProxy },
       { kind: 'exact', path: PING_PATH, handler: handlePing },
       { kind: 'exact', path: PANEL_PATH, handler: (req, res) => handlePanel(req, res, ctx) },
       { kind: 'exact', path: CONTEXT_PATH, handler: handleContext },

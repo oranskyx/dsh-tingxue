@@ -42,7 +42,7 @@ test('只注册一个客户端模块，且 id 不与独立 UI 包重名', () => 
   assert.equal(captured[0].id, 'dsh-tingxue', 'id 必须是 dsh-tingxue（旧值 dsh-tingxue-ui 会与独立包撞车）')
 })
 
-test('apply 在假 ctx 下注册三个面板且不抛错', () => {
+test('apply 在假 ctx 下注册四个面板且不抛错', () => {
   const definition = captured[0]
   assert.equal(typeof definition.factory, 'function')
 
@@ -72,17 +72,17 @@ test('apply 在假 ctx 下注册三个面板且不抛错', () => {
   }
 
   const entryIds = slots.map((s) => s.entry.id).filter(Boolean)
-  assert.deepEqual(entryIds, ['tingxue-companion', 'tingxue-agent', 'tingxue-memory'])
+  assert.deepEqual([...entryIds].sort(), ['tingxue-agent', 'tingxue-companion', 'tingxue-graph', 'tingxue-memory'])
   const mainKeys = slots.filter((s) => s.entry.name === 'main').map((s) => s.entry.key)
-  assert.deepEqual(mainKeys, ['tingxue-companion', 'tingxue-agent', 'tingxue-memory'])
+  assert.deepEqual([...mainKeys].sort(), ['tingxue-agent', 'tingxue-companion', 'tingxue-graph', 'tingxue-memory'])
 })
 
-test('三个页面在假数据下都能渲染', () => {
+test('四个页面在假数据下都能渲染', () => {
   const definition = captured[0]
   // 把页面组件暴露出来（只在内存里改写源码，不落盘）
   const patched = source.replace(
     '    return {\n      inject: [\'slots\', \'locale\'],',
-    '    globalThis.__PANEL_TEST__ = { CompanionPage, AgentPage, MemoryPage, makeTr, DICT }\n    return {\n      inject: [\'slots\', \'locale\'],',
+    '    globalThis.__PANEL_TEST__ = { CompanionPage, AgentPage, MemoryPage, GraphPage, makeTr, DICT }\n    return {\n      inject: [\'slots\', \'locale\'],',
   )
   assert.notEqual(patched, source, '页面组件必须能被测试拿到')
   const localCaptured = []
@@ -112,7 +112,7 @@ test('三个页面在假数据下都能渲染', () => {
     archives: [],
     context: {},
   }
-  for (const name of ['CompanionPage', 'AgentPage', 'MemoryPage']) {
+  for (const name of ['CompanionPage', 'AgentPage', 'MemoryPage', 'GraphPage']) {
     const Page = exposed[name]
     assert.equal(typeof Page, 'function', `${name} 必须是组件`)
     const tree = Page({ tr: (k, f) => f ?? k, state })

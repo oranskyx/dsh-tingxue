@@ -28,6 +28,7 @@ window.__ModuleLoader__.load({
     const PANEL_AGENT = 'tingxue-agent'
     /** 记忆服务面板：放所有「两个 bot 共用」的配置（模型 / API / 服务状态 / 记忆库 / QQ 通道）。 */
     const PANEL_MEMORY = 'tingxue-memory'
+  const PANEL_GRAPH = 'tingxue-graph'
 
     const DEFAULT_MEMORY = 'http://127.0.0.1:8766'
     const DEFAULT_SKILLS_DIR = 'D:\\dsh-home\\skills'
@@ -37,6 +38,10 @@ window.__ModuleLoader__.load({
       nav_companion: '聊天面板',
       nav_agent: 'agent面板',
       nav_memory: '记忆服务面板',
+      nav_graph: '记忆图谱',
+      graph_title: '记忆图谱',
+      graph_sub: '实体关系可视化 · 实体 / 关系 / 记忆 / 回收站',
+      graph_offline: '图谱界面没有响应：8765 面板没起来。启动记忆服务后刷新即可。',
 
       loading: '连接中…',
       refresh: '刷新',
@@ -387,6 +392,17 @@ window.__ModuleLoader__.load({
         h('rect', { x: 1.7, y: 2.4, width: 12.6, height: 11.2, rx: 2 }),
         h('path', { d: 'M4.6 6.2l2.3 2-2.3 2' }),
         h('path', { d: 'M8.8 10.2h2.7' }))
+    }
+
+    /** 记忆图谱图标：三个节点 + 连线，和另三个图标的笔画风格一致。 */
+    function GraphIcon() {
+      return h('svg', { viewBox: '0 0 16 16', width: 16, height: 16, ...stroke },
+        h('circle', { cx: 3.4, cy: 4.2, r: 1.7 }),
+        h('circle', { cx: 12.6, cy: 4.2, r: 1.7 }),
+        h('circle', { cx: 8, cy: 12.2, r: 1.7 }),
+        h('path', { d: 'M4.9 5.3l2.2 5.5' }),
+        h('path', { d: 'M11.1 5.3L8.9 10.8' }),
+        h('path', { d: 'M5.1 4.2h5.8' }))
     }
 
     /** 记忆服务面板图标：一个库（三层）+ 底部支撑，和另两个图标的笔画风格一致。 */
@@ -1344,6 +1360,32 @@ window.__ModuleLoader__.load({
      * 也变了 —— 那是让人不信任面板的最快方式。分开之后语义就清楚了：
      * 聊天面板 / agent面板 = 这个 bot 自己的东西；记忆服务面板 = 大家共用的东西。
      */
+    /**
+     * 记忆图谱面板：侧边栏直接看图，不用再去开浏览器标签页。
+     *
+     * 图谱本体是 8765 那套现成界面（canvas 力导向 + 四个管理页签），重写一遍
+     * 既浪费又会引入新 bug。这里用同源反代嵌进面板：
+     *   /dsh-tingxue-graph/*  →  http://127.0.0.1:8765/*
+     * 同源所以 iframe 不被跨域拦，主题跟着面板走。
+     */
+    function GraphPage(props) {
+      const tr = pageTr(props)
+      const [state, reload] = useDashboard()
+      return h('div', { className: 'txu-page', 'data-dsh-tingxue-ui': 'graph' },
+        h('style', null, CSS),
+        h('div', { className: 'txu-inner txu-inner-graph' },
+          h(PageHeader, {
+            title: tr('graph_title', '记忆图谱'),
+            sub: tr('graph_sub', '实体关系可视化 · 实体 / 关系 / 记忆 / 回收站'),
+            state, tr, onRefresh: reload,
+          }),
+          h('iframe', {
+            className: 'txu-graph-frame',
+            src: '/dsh-tingxue-graph/',
+            title: tr('graph_title', '记忆图谱'),
+          })))
+    }
+
     function MemoryPage(props) {
       const tr = pageTr(props)
       const [state, reload] = useDashboard()
@@ -1376,6 +1418,8 @@ window.__ModuleLoader__.load({
     const CSS = `
 .txu-page{box-sizing:border-box;height:100%;overflow-y:auto;padding:22px 28px 48px;color:var(--dsw-alias-label-primary,inherit);font-family:inherit;-webkit-font-smoothing:antialiased}
 .txu-inner{max-width:980px;margin:0 auto}
+.txu-inner-graph{max-width:none}
+.txu-graph-frame{display:block;width:100%;min-height:calc(100vh - 210px);border:0;border-radius:12px;background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.06));color-scheme:light dark}
 .txu-head{display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:18px}
 .txu-title-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .txu-title{font-size:20px;font-weight:600;line-height:1.35;letter-spacing:.01em}
@@ -1483,6 +1527,13 @@ window.__ModuleLoader__.load({
         label: () => tr('nav_memory', '记忆服务面板'),
       }, MemoryIcon))
 
+      ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+        name: 'sidebar.panellist',
+        id: PANEL_GRAPH,
+        order: 41,
+        label: () => tr('nav_graph', '记忆图谱'),
+      }, GraphIcon))
+
       // 两个整页：main 是 keyed 槽位，key 必须等于上面的入口 id。
       ctx.slots.inject('main', () => ctx.slots.register({
         name: 'main',
@@ -1495,6 +1546,12 @@ window.__ModuleLoader__.load({
         key: PANEL_AGENT,
         inject: () => ({ tr }),
       }, AgentPage))
+
+      ctx.slots.inject('main', () => ctx.slots.register({
+        name: 'main',
+        key: PANEL_GRAPH,
+        component: GraphPage,
+      }))
 
       ctx.slots.inject('main', () => ctx.slots.register({
         name: 'main',
