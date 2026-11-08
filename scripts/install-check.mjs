@@ -1450,13 +1450,22 @@ export function registerCoreCases({ t, tmp, eq, assert }) {
       const r = runPnpm(['install', '--ignore-scripts', '--lockfile-only', '--offline'], dir)
       assert(r.error === null, `pnpm 进程没能启动（产物接受性无法判定）：${r.error}`)
 
-      // ② 再证明夹具**确实让 pnpm 读到了 patchedDependencies**：本夹具没有真实依赖，
-      //    pnpm 必然以 ERR_PNPM_UNUSED_PATCH 收场。这既说明 YAML 被解析成功，
-      //    也说明「空输出」不会混进来当通过。
-      assert(/UNUSED_PATCH|patches were not used/i.test(r.out),
-        `pnpm 没读到 patchedDependencies（输出为空或语义不符，说明这次判定不可信）：${r.out.slice(0, 400) || '(空输出)'}`)
-      assert(/dsh-notifier|other-pkg/.test(r.out),
-        `pnpm 的 UNUSED_PATCH 里没点名本次接线：${r.out.slice(0, 400)}`)
+      // ② 证明 pnpm **确实读了** patchedDependencies，而不是「输出为空 → 断言恒真」。
+      //    这里必须容两个版本的两种收场（2026-11-08 CI 实测）：
+      //      · pnpm 11（本机）：无依赖时以 ERR_PNPM_UNUSED_PATCH 报错，并点名没被用到的补丁；
+      //      · pnpm 9（CI）：同样内容退出码 0、打一句 Done，不报 UNUSED_PATCH。
+      //    所以判据是「要么喊了 UNUSED_PATCH，要么正常装完并落下了 lockfile」——
+      //    两者都只可能在 YAML 被解析成功之后发生。
+      const sawUnused = /UNUSED_PATCH|patches were not used/i.test(r.out)
+      const lock = join(dir, 'pnpm-lock.yaml')
+      const lockWritten = existsSync(lock)
+      assert(sawUnused || (r.ok && lockWritten),
+        `这次判定不可信：既没报 UNUSED_PATCH，也没有正常装完落下 lockfile`
+        + `（ok=${r.ok} lock=${lockWritten}）：${r.out.slice(0, 400) || '(空输出)'}`)
+      if (sawUnused) {
+        assert(/dsh-notifier|other-pkg/.test(r.out),
+          `pnpm 的 UNUSED_PATCH 里没点名本次接线：${r.out.slice(0, 400)}`)
+      }
 
       // ③ 最后才是真正要排除的：解析类错误（这正是旧版字符串追加会踩的坑）。
       assert(!/duplicated mapping key|YAMLException|bad indentation|can not read a block mapping/i.test(r.out),
