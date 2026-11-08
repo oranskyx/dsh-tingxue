@@ -12,13 +12,13 @@
 // 全部颜色只取宿主主题令牌（--dsw-alias-* / --dsw-radius-*），不写死深浅色。
 
 window.__ModuleLoader__.load({
-  id: 'dsh-tingxue-ui',
+  id: 'dsh-tingxue',
   factory(require) {
     const React = require('react')
     const h = React.createElement
 
     // ── 常量 ────────────────────────────────────────────────────────────────
-    const NS = 'dsh-tingxue-ui'
+    const NS = 'dsh-tingxue-panel'
     const MEMORY = '/dsh-tingxue-ui/memory'
     const PING = '/dsh-tingxue-ui/ping'
     const PANEL = '/dsh-tingxue-ui/panel'
@@ -1461,7 +1461,7 @@ window.__ModuleLoader__.load({
       ctx.effect(() => ctx.locale.register(NS, { zh: DICT, en: DICT }), 'dsh-tingxue-ui:dictionary')
       const tr = makeTr(ctx.locale.bind(NS))
 
-      // 两个侧栏入口：图标注册进 root-scoped 的 sidebar.panellist 列表。
+      // 三个侧栏入口：图标注册进 root-scoped 的 sidebar.panellist 列表。
       ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
         name: 'sidebar.panellist',
         id: PANEL_COMPANION,
@@ -1475,6 +1475,13 @@ window.__ModuleLoader__.load({
         order: 39,
         label: () => tr('nav_agent', 'agent面板'),
       }, AgentIcon))
+
+      ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+        name: 'sidebar.panellist',
+        id: PANEL_MEMORY,
+        order: 40,
+        label: () => tr('nav_memory', '记忆服务面板'),
+      }, MemoryIcon))
 
       // 两个整页：main 是 keyed 槽位，key 必须等于上面的入口 id。
       ctx.slots.inject('main', () => ctx.slots.register({
