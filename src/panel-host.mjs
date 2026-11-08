@@ -25,9 +25,6 @@ const MEMORY_PREFIX = '/dsh-tingxue-ui/memory'
 const GRAPH_PREFIX = '/dsh-tingxue-graph'
 /** 一键启动记忆服务（面板里点按钮走这里，不用去开终端）。 */
 const SERVICE_START_PATH = '/dsh-tingxue-ui/service/start'
-/** 面板自带的静态资源（图谱引擎）；只放白名单里的文件，别把它做成目录服务器。 */
-const ASSET_PREFIX = '/dsh-tingxue-ui/assets'
-const ASSET_FILES = new Set(['graph-engine.js'])
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const PING_PATH = '/dsh-tingxue-ui/ping'
 const PANEL_PATH = '/dsh-tingxue-ui/panel'
@@ -307,36 +304,6 @@ function createRoutes(config = {}, ctx) {
       sendJson(res, 502, { ok: false, error: `图谱界面不可达（${graphOrigin}）：${reason}` })
     } finally {
       clearTimeout(timer)
-    }
-  }
-
-  /**
-   * 面板自带的静态资源。
-   *
-   * 为什么需要它：图谱引擎（graph-engine.js）有一千行 canvas 力导向算法，
-   * 与其在面板里重写一遍，不如原样复用。但浏览器侧不能 require 本地文件，
-   * 所以由宿主同源吐出来，面板用 <script src> 加载（CSP 的 script-src 'self' 正好放行）。
-   */
-  async function handleAsset(req, res) {
-    if (!isLoopback(req)) return sendJson(res, 403, { ok: false, error: '只允许本机 loopback 访问' })
-    let name = ''
-    try {
-      const url = new URL(String(req.url ?? '/'), 'http://localhost')
-      name = decodeURIComponent(url.pathname.slice(ASSET_PREFIX.length + 1))
-    } catch {
-      return sendJson(res, 400, { ok: false, error: '无法解析请求地址' })
-    }
-    if (!ASSET_FILES.has(name)) return sendJson(res, 404, { ok: false, error: `没有这个资源：${name}` })
-    try {
-      const buffer = await readFile(join(REPO_ROOT, 'client', name))
-      res.writeHead(200, {
-        'content-type': 'text/javascript; charset=utf-8',
-        'cache-control': 'no-cache',
-        'content-length': buffer.length,
-      })
-      res.end(buffer)
-    } catch (error) {
-      sendJson(res, 404, { ok: false, error: `读取失败：${String(error?.message ?? error)}` })
     }
   }
 
@@ -843,7 +810,6 @@ function createRoutes(config = {}, ctx) {
       { kind: 'prefix', path: MEMORY_PREFIX, handler: handleProxy },
       { kind: 'prefix', path: GRAPH_PREFIX, handler: handleGraphProxy },
       { kind: 'exact', path: SERVICE_START_PATH, handler: handleServiceStart },
-      { kind: 'prefix', path: ASSET_PREFIX, handler: handleAsset },
       { kind: 'exact', path: PING_PATH, handler: handlePing },
       { kind: 'exact', path: PANEL_PATH, handler: (req, res) => handlePanel(req, res, ctx) },
       { kind: 'exact', path: CONTEXT_PATH, handler: handleContext },
