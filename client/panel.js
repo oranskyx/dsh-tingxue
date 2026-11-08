@@ -42,6 +42,9 @@ window.__ModuleLoader__.load({
       graph_title: '记忆图谱',
       graph_sub: '实体关系可视化 · 实体 / 关系 / 记忆 / 回收站',
       graph_offline: '图谱界面没有响应：8765 面板没起来。启动记忆服务后刷新即可。',
+      graph_fallback: '如果上面是空白，说明内嵌被拦了——',
+      graph_open_raw: '在新标签页打开图谱',
+      graph_fallback2: '（同一份数据，只是外面少了面板壳）',
 
       loading: '连接中…',
       refresh: '刷新',
@@ -1383,7 +1386,16 @@ window.__ModuleLoader__.load({
             className: 'txu-graph-frame',
             src: '/dsh-tingxue-graph/',
             title: tr('graph_title', '记忆图谱'),
-          })))
+          }),
+          h('p', { className: 'txu-muted', style: { marginTop: '8px' } },
+            tr('graph_fallback', '如果上面是空白，说明内嵌被拦了——') ,
+            h('a', {
+              href: 'http://127.0.0.1:8765/',
+              target: '_blank',
+              rel: 'noreferrer',
+              style: { color: 'var(--dsw-alias-state-business-primary, #4c8dff)' },
+            }, tr('graph_open_raw', '在新标签页打开图谱')),
+            tr('graph_fallback2', '（同一份数据，只是外面少了面板壳）'))))
     }
 
     function MemoryPage(props) {
