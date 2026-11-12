@@ -46,6 +46,8 @@ const DEFAULT_SKILLS_DIR = 'D:\\dsh-home\\skills'
 
 const PROBE_TIMEOUT_MS = 1500
 const PROXY_TIMEOUT_MS = 8000
+/** 反代请求体上限：图谱页面的编辑请求都很小，1MB 足够，超出直接拒。 */
+const PROXY_MAX_BODY_BYTES = 1024 * 1024
 const BODY_LIMIT_BYTES = 1024 * 1024
 
 const INJECT_TIERS = ['full', 'archive', 'off']
@@ -280,17 +282,41 @@ function createRoutes(config = {}, ctx) {
     }
 
     const method = String(req.method ?? 'GET').toUpperCase()
-    if (!['GET', 'HEAD'].includes(method)) {
-      return sendJson(res, 405, { ok: false, error: '图谱界面只读' }, { Allow: 'GET, HEAD' })
+    // 反代要透传读写两类请求：iframe 里的页面既能看图，也要能改实体、加关系、
+    // 删记忆。之前这里只放 GET/HEAD，所有编辑操作都被 405 挡下，表现就是
+    // 「图谱界面只读」。
+    const ALLOWED_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']
+    if (!ALLOWED_METHODS.includes(method)) {
+      return sendJson(res, 405, { ok: false, error: `不支持的请求方法：${method}` }, { Allow: ALLOWED_METHODS.join(', ') })
+    }
+
+    // 非 GET/HEAD 必须把请求体原样带过去，否则上游收到空 body 会 400。
+    let payload
+    if (method !== 'GET' && method !== 'HEAD') {
+      const chunks = []
+      let size = 0
+      for await (const chunk of req) {
+        size += chunk.length
+        if (size > PROXY_MAX_BODY_BYTES) {
+          return sendJson(res, 413, { ok: false, error: `请求体过大（上限 ${PROXY_MAX_BODY_BYTES} 字节）` })
+        }
+        chunks.push(chunk)
+      }
+      payload = chunks.length ? Buffer.concat(chunks) : undefined
     }
 
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS)
     try {
+      const headers = { accept: String(req.headers?.accept ?? '*/*') }
+      if (payload && req.headers?.['content-type']) {
+        headers['content-type'] = String(req.headers['content-type'])
+      }
       const upstream = await fetch(graphOrigin + rest + search, {
         method,
         signal: controller.signal,
-        headers: { accept: String(req.headers?.accept ?? '*/*') },
+        headers,
+        ...(payload ? { body: payload } : {}),
       })
       const buffer = Buffer.from(await upstream.arrayBuffer())
       res.writeHead(upstream.status, {
