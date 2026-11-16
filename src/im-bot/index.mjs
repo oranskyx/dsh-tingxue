@@ -51,7 +51,16 @@ function botSettings(isChat) {
 
 /** 每个会话最近一句「人话」，供检索和面板诊断用。 */
 const SECTION_PERSONA = 'dsh-tingxue:persona';
-const ORDER_PERSONA = 900;
+// 人格段在 DSH 的 SECTION_ORDERS 里占哪个位置。
+//
+// 选 10150 的理由（DSH 的 SECTION_ORDERS 是升序，小在前）：
+//   -1000 HARNESS_IDENTITY … 1000-3100 全部 TOOL_* 段 … 10100 WEB_SURFACE
+//   10150 ← 这里，人格段；10200 DEPLOYMENT_PERSONA_SUFFIX
+// 放在所有工具段之后有两个好处：一是人格紧贴对话，指令权重更靠后更强；
+// 二是 prompt 缓存按前缀计算，改档案时只让 10200 那一小段失效，不会把
+// 一千多行工具定义一起打掉。
+// 原来的 900 还与 DSH 的 FILE_REFERENCE 撞值，同 order 的先后顺序未定义。
+const ORDER_PERSONA = 10150;
 /**
  * 塞在人格段落最前面的标记：它的作用是让 'system-prompt/assemble' 那一步
  * 知道「这一场是聊天 bot，请把默认提示词整段换掉」——
@@ -764,7 +773,7 @@ export function apply(ctx, config = {}) {
           if (config.injectEverywhere === true) return personaWithOverride(readPersona(personaPath));
           // 非 IM 会话（GUI、本会话）一律空串，什么都不做。
           if (!isImSession(assembly, botStateDir)) return '';
-          // 两个 bot：人格都进 system、都排最前。
+          // 两个 bot：人格都进 system，位置由 ORDER_PERSONA 决定（在全部工具段之后）。
           // 差别只有一处：Agent Teams 的策略段（team:policy）只给 agent bot 留
           // —— 2026-11-08 主人定：Agent Teams 是重要能力，工作 bot 必须有；
           // 聊天 bot 不需要开会话团队，那段的「You are the Team Lead」只会带歪语气。
